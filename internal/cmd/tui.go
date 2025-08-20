@@ -89,7 +89,7 @@ func runTUI(cmd *cobra.Command, args []string) error {
 	workingSet := models.NewWorkingSet(bundle)
 
 	// Initialize TUI
-	model := ui.NewAppModel(workingSet)
+	model := ui.NewAppModel(workingSet, fs)
 
 	// Start the TUI program
 	program := tea.NewProgram(model, tea.WithAltScreen())

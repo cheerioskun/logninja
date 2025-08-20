@@ -5,31 +5,39 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/cheerioskun/logninja/internal/models"
+	"github.com/cheerioskun/logninja/internal/parser"
+	"github.com/cheerioskun/logninja/internal/utils"
 	"github.com/spf13/afero"
 )
 
-// BundleScanner handles bundle discovery and file enumeration
+const (
+	// PeakLines is the number of lines we examine to determine if a file is a log file
+	PeakLines = 10
+)
+
+// BundleScanner handles bundle discovery and file enumeration with a two-phase approach:
+// Phase 1: Collect ALL files using WalkDir
+// Phase 2: Filter files based on content peeking only
 type BundleScanner struct {
-	fs       afero.Fs
-	maxDepth int
-	logExts  map[string]bool
+	fs                 afero.Fs
+	maxDepth           int
+	timestampExtractor *parser.TimestampExtractor
+
+	// Two-phase approach data
+	allFiles   []string // Complete file set from WalkDir
+	workingSet []string // Filtered log files after content analysis
 }
 
 // NewBundleScanner creates a new BundleScanner with the given filesystem
 func NewBundleScanner(fs afero.Fs) *BundleScanner {
 	return &BundleScanner{
-		fs:       fs,
-		maxDepth: 10, // Default max depth
-		logExts: map[string]bool{
-			".log":  true,
-			".txt":  true,
-			".out":  true,
-			".err":  true,
-			".json": true,
-		},
+		fs:                 fs,
+		maxDepth:           10, // Default max depth
+		timestampExtractor: parser.NewTimestampExtractor(fs),
+		allFiles:           make([]string, 0),
+		workingSet:         make([]string, 0),
 	}
 }
 
@@ -38,15 +46,7 @@ func (bs *BundleScanner) SetMaxDepth(depth int) {
 	bs.maxDepth = depth
 }
 
-// AddLogExtension adds a file extension to be considered as log files
-func (bs *BundleScanner) AddLogExtension(ext string) {
-	if !strings.HasPrefix(ext, ".") {
-		ext = "." + ext
-	}
-	bs.logExts[ext] = true
-}
-
-// ScanBundle scans a directory and returns a Bundle with all discovered files
+// ScanBundle scans a directory using a two-phase approach and returns a Bundle with all discovered files
 func (bs *BundleScanner) ScanBundle(path string) (*models.Bundle, error) {
 	// Verify path exists and is a directory
 	info, err := bs.fs.Stat(path)
@@ -58,12 +58,23 @@ func (bs *BundleScanner) ScanBundle(path string) (*models.Bundle, error) {
 		return nil, fmt.Errorf("path %s is not a directory", path)
 	}
 
-	bundle := models.NewBundle(path, bs.fs)
-
-	// Recursively scan the directory
-	err = bs.scanDirectory(path, "", 0, bundle)
+	// Phase 1: Collect ALL files using WalkDir
+	err = bs.collectAllFiles(path)
 	if err != nil {
-		return nil, fmt.Errorf("failed to scan bundle: %w", err)
+		return nil, fmt.Errorf("failed to collect files: %w", err)
+	}
+
+	// Phase 2: Filter files based on content peeking only
+	err = bs.filterLogFiles()
+	if err != nil {
+		return nil, fmt.Errorf("failed to filter log files: %w", err)
+	}
+
+	// Create bundle with working set
+	bundle := models.NewBundle(path, bs.fs)
+	err = bs.buildBundle(path, bundle)
+	if err != nil {
+		return nil, fmt.Errorf("failed to build bundle: %w", err)
 	}
 
 	// Update bundle metadata
@@ -72,95 +83,124 @@ func (bs *BundleScanner) ScanBundle(path string) (*models.Bundle, error) {
 	return bundle, nil
 }
 
-// scanDirectory recursively scans a directory and adds files to the bundle
-func (bs *BundleScanner) scanDirectory(basePath, relativePath string, depth int, bundle *models.Bundle) error {
-	if depth > bs.maxDepth {
-		return nil // Skip if max depth exceeded
-	}
+// collectAllFiles performs Phase 1: collect ALL files using WalkDir
+func (bs *BundleScanner) collectAllFiles(basePath string) error {
+	bs.allFiles = make([]string, 0) // Reset the file list
 
-	currentPath := filepath.Join(basePath, relativePath)
+	// Use afero.Walk which is equivalent to filepath.WalkDir
+	err := afero.Walk(bs.fs, basePath, func(fullPath string, info os.FileInfo, err error) error {
+		if err != nil {
+			// Log warning but continue scanning
+			utils.Warning("failed to access %s: %v", fullPath, err)
+			return nil // Continue walking
+		}
 
-	entries, err := afero.ReadDir(bs.fs, currentPath)
+		// Skip directories
+		if info.IsDir() {
+			// Check depth limit for directories
+			relPath, err := filepath.Rel(basePath, fullPath)
+			if err != nil {
+				return nil // Continue on error
+			}
+
+			depth := len(filepath.SplitList(relPath))
+			if relPath != "." && depth > bs.maxDepth {
+				return filepath.SkipDir // Skip this directory and its contents
+			}
+			return nil // Continue into directory
+		}
+
+		// Add all regular files to our complete file set
+		bs.allFiles = append(bs.allFiles, fullPath)
+		return nil
+	})
+
 	if err != nil {
-		return fmt.Errorf("failed to read directory %s: %w", currentPath, err)
+		return fmt.Errorf("failed to walk directory %s: %w", basePath, err)
 	}
 
-	for _, entry := range entries {
-		entryRelPath := filepath.Join(relativePath, entry.Name())
-		entryFullPath := filepath.Join(basePath, entryRelPath)
+	return nil
+}
 
-		if entry.IsDir() {
-			// Recursively scan subdirectory
-			err := bs.scanDirectory(basePath, entryRelPath, depth+1, bundle)
-			if err != nil {
-				// Log warning but continue scanning
-				fmt.Printf("Warning: failed to scan directory %s: %v\n", entryRelPath, err)
-			}
-		} else {
-			// Process file
-			fileInfo, err := bs.processFile(entryFullPath, entryRelPath, entry)
-			if err != nil {
-				// Log warning but continue scanning
-				fmt.Printf("Warning: failed to process file %s: %v\n", entryRelPath, err)
-				continue
-			}
+// filterLogFiles performs Phase 2: filter files based on content peeking only
+func (bs *BundleScanner) filterLogFiles() error {
+	bs.workingSet = make([]string, 0) // Reset the working set
 
-			bundle.AddFile(*fileInfo)
+	for _, filePath := range bs.allFiles {
+		// Check if this file looks like a log file based on content only
+		if bs.isLogFileByContent(filePath) {
+			bs.workingSet = append(bs.workingSet, filePath)
 		}
 	}
 
 	return nil
 }
 
-// processFile processes a single file and returns FileInfo
-func (bs *BundleScanner) processFile(fullPath, relativePath string, info os.FileInfo) (*models.FileInfo, error) {
-	fileInfo := &models.FileInfo{
-		Path:         relativePath,
-		Size:         info.Size(),
-		IsLogFile:    bs.isLogFile(relativePath),
-		TimeRange:    nil, // Will be populated by log parser if needed
-		LineCount:    0,   // Will be estimated if needed
-		Selected:     false,
-		LastModified: info.ModTime(),
-	}
-
-	// For log files, estimate line count and check for timestamps
-	if fileInfo.IsLogFile {
-		lineCount, err := bs.estimateLineCount(fullPath)
-		if err == nil {
-			fileInfo.LineCount = lineCount
+// buildBundle creates a Bundle from the working set
+func (bs *BundleScanner) buildBundle(basePath string, bundle *models.Bundle) error {
+	// Add all files (both log and non-log) to bundle for completeness
+	for _, fullPath := range bs.allFiles {
+		relPath, err := filepath.Rel(basePath, fullPath)
+		if err != nil {
+			utils.Warning("failed to get relative path for %s: %v", fullPath, err)
+			continue
 		}
 
-		// For now, we'll set IsLogFile to true for files with log extensions
-		// Timestamp extraction will be handled by the parser in Phase 2
+		info, err := bs.fs.Stat(fullPath)
+		if err != nil {
+			utils.Warning("failed to stat file %s: %v", fullPath, err)
+			continue
+		}
+
+		// Check if this file is in our working set (i.e., it's a log file)
+		isLogFile := bs.isInWorkingSet(fullPath)
+
+		fileInfo := &models.FileInfo{
+			Path:         relPath,
+			Size:         info.Size(),
+			IsLogFile:    isLogFile,
+			TimeRange:    nil, // Will be populated by log parser if needed
+			Selected:     false,
+			LastModified: info.ModTime(),
+		}
+
+		bundle.AddFile(*fileInfo)
 	}
 
-	return fileInfo, nil
+	return nil
 }
 
-// isLogFile determines if a file should be considered a log file
-func (bs *BundleScanner) isLogFile(path string) bool {
-	ext := strings.ToLower(filepath.Ext(path))
-
-	// Check known log extensions
-	if bs.logExts[ext] {
-		return true
-	}
-
-	// Check common log file patterns
-	filename := strings.ToLower(filepath.Base(path))
-	logPatterns := []string{
-		"log", "logs", "syslog", "messages", "access", "error", "debug",
-		"trace", "audit", "event", "console", "output", "stderr", "stdout",
-	}
-
-	for _, pattern := range logPatterns {
-		if strings.Contains(filename, pattern) {
+// isInWorkingSet checks if a file path is in the working set
+func (bs *BundleScanner) isInWorkingSet(filePath string) bool {
+	for _, workingFile := range bs.workingSet {
+		if workingFile == filePath {
 			return true
 		}
 	}
-
 	return false
+}
+
+// isLogFileByContent determines if a file is a log file based ONLY on content peeking
+func (bs *BundleScanner) isLogFileByContent(filePath string) bool {
+	if bs.timestampExtractor == nil {
+		return false
+	}
+
+	// Use the timestamp detection logic to peek at file content
+	result, err := bs.timestampExtractor.DetectBestPattern(filePath)
+	if err != nil {
+		// If we can't read the file, assume it's not a log file
+		return false
+	}
+
+	// Require a minimum threshold for log file detection
+	// For a file to be considered a log file, we need:
+	// 1. At least 2 timestamp matches in the first 10 lines, AND
+	// 2. At least 30% of lines must have timestamps (confidence >= 0.3)
+	const minTimestampMatches = 2
+	const minConfidence = 0.3
+
+	return result.MatchCount >= minTimestampMatches && result.Confidence >= minConfidence
 }
 
 // estimateLineCount provides a rough estimate of lines in a file
@@ -222,15 +262,6 @@ func (bs *BundleScanner) updateBundleMetadata(bundle *models.Bundle) {
 	// This method can be extended for additional metadata processing
 }
 
-// GetSupportedExtensions returns a list of supported log file extensions
-func (bs *BundleScanner) GetSupportedExtensions() []string {
-	var exts []string
-	for ext := range bs.logExts {
-		exts = append(exts, ext)
-	}
-	return exts
-}
-
 // QuickScan performs a quick scan to get basic bundle information without deep analysis
 func (bs *BundleScanner) QuickScan(path string) (*models.BundleMetadata, error) {
 	info, err := bs.fs.Stat(path)
@@ -257,11 +288,23 @@ func (bs *BundleScanner) QuickScan(path string) (*models.BundleMetadata, error) 
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			metadata.TotalFileCount++
-			if bs.isLogFile(entry.Name()) {
+			// For quick scan, we check file content to determine if it's a log file
+			entryFullPath := filepath.Join(path, entry.Name())
+			if bs.isLogFileByContent(entryFullPath) {
 				metadata.LogFileCount++
 			}
 		}
 	}
 
 	return metadata, nil
+}
+
+// GetAllFiles returns the complete file set collected during Phase 1
+func (bs *BundleScanner) GetAllFiles() []string {
+	return bs.allFiles
+}
+
+// GetWorkingSet returns the filtered log files from Phase 2
+func (bs *BundleScanner) GetWorkingSet() []string {
+	return bs.workingSet
 }

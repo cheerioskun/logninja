@@ -53,7 +53,7 @@ func NewFileSetFromWorkingSet(ws *WorkingSet) *FileSet {
 	if ws.Bundle != nil {
 		for _, file := range ws.Bundle.Files {
 			if ws.IsFileSelected(file.Path) {
-				fs.AddFile(file.Path, file.Size, file.LineCount)
+				fs.AddFile(file.Path, file.Size)
 			}
 		}
 	}
@@ -62,10 +62,9 @@ func NewFileSetFromWorkingSet(ws *WorkingSet) *FileSet {
 }
 
 // AddFile adds a file to the FileSet
-func (fs *FileSet) AddFile(path string, size int64, lineCount int64) {
+func (fs *FileSet) AddFile(path string, size int64) {
 	fs.Files = append(fs.Files, path)
 	fs.TotalSize += size
-	fs.LineCount += lineCount
 }
 
 // RemoveFile removes a file from the FileSet by path

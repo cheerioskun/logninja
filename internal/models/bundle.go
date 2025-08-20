@@ -24,7 +24,6 @@ type FileInfo struct {
 	Size         int64      `json:"size"`          // File size in bytes
 	IsLogFile    bool       `json:"is_log_file"`   // Detected as log file
 	TimeRange    *TimeRange `json:"time_range"`    // Time span (nil if not parsed)
-	LineCount    int64      `json:"line_count"`    // Approximate line count
 	Selected     bool       `json:"selected"`      // User selection state
 	LastModified time.Time  `json:"last_modified"` // File modification time
 }

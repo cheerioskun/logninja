@@ -18,14 +18,18 @@ var (
 // scanCmd represents the scan command
 var scanCmd = &cobra.Command{
 	Use:   "scan [path]",
-	Short: "Scan a directory for log files",
-	Long: `Scan a directory and display information about discovered log files.
+	Short: "Scan a directory for log files using content analysis",
+	Long: `Scan a directory and identify log files through content-based detection.
 
-This command provides a quick overview of what would be available in the TUI:
-- Total file count
-- Log file count
-- File sizes and types
-- Basic bundle metadata
+This command uses a two-phase approach:
+1. Collect ALL files in the directory tree
+2. Analyze file contents to identify log files (timestamp detection)
+
+Provides an overview of what would be available in the TUI:
+- Total file count  
+- Log files identified by content analysis
+- File sizes and metadata
+- Two-phase scanning statistics
 
 Examples:
   logninja scan /var/log
@@ -105,9 +109,10 @@ func runScan(cmd *cobra.Command, args []string) error {
 
 		fmt.Println()
 
-		// Show supported extensions
-		exts := bundleScanner.GetSupportedExtensions()
-		fmt.Printf("Supported log extensions: %v\n", exts)
+		// Show scanning approach information
+		fmt.Println("Scanning approach: Two-phase content-based detection")
+		fmt.Printf("  Phase 1: Collected %d total files\n", len(bundleScanner.GetAllFiles()))
+		fmt.Printf("  Phase 2: Identified %d log files by content analysis\n", len(bundleScanner.GetWorkingSet()))
 
 		if viper.GetBool("verbose") {
 			fmt.Println()
@@ -120,8 +125,8 @@ func runScan(cmd *cobra.Command, args []string) error {
 				if file.IsLogFile {
 					logFiles++
 					if logFiles <= 10 { // Show first 10 log files
-						fmt.Printf("  [LOG] %s (%s, ~%d lines)\n",
-							file.Path, formatBytes(file.Size), file.LineCount)
+						fmt.Printf("  [LOG] %s (%s, detected by content analysis)\n",
+							file.Path, formatBytes(file.Size))
 					}
 				} else {
 					otherFiles++

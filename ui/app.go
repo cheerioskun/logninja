@@ -11,7 +11,9 @@ import (
 	"github.com/cheerioskun/logninja/internal/messages"
 	"github.com/cheerioskun/logninja/internal/models"
 	"github.com/cheerioskun/logninja/ui/filelist"
+	"github.com/cheerioskun/logninja/ui/histogram"
 	"github.com/cheerioskun/logninja/ui/regex"
+	"github.com/spf13/afero"
 )
 
 // FocusedPanel represents which panel is currently focused
@@ -33,9 +35,10 @@ type AppModel struct {
 	workingSet *models.WorkingSet
 
 	// UI Components
-	includePanel  *regex.SingleModel
-	excludePanel  *regex.SingleModel
-	fileListPanel *filelist.Model
+	includePanel   *regex.SingleModel
+	excludePanel   *regex.SingleModel
+	fileListPanel  *filelist.Model
+	histogramPanel *histogram.Model
 
 	// UI state
 	focused      FocusedPanel
@@ -51,11 +54,12 @@ type AppModel struct {
 }
 
 // NewAppModel creates a new application model
-func NewAppModel(workingSet *models.WorkingSet) *AppModel {
+func NewAppModel(workingSet *models.WorkingSet, fs afero.Fs) *AppModel {
 	// Create separate include and exclude panels
 	includePanel := regex.NewSingleModel(regex.IncludeType)
 	excludePanel := regex.NewSingleModel(regex.ExcludeType)
 	fileListPanel := filelist.NewModel()
+	histogramPanel := histogram.NewModel(fs)
 
 	if workingSet != nil && workingSet.Bundle != nil {
 		var filePaths []string
@@ -64,21 +68,23 @@ func NewAppModel(workingSet *models.WorkingSet) *AppModel {
 		}
 		includePanel.SetFiles(filePaths)
 		excludePanel.SetFiles(filePaths)
+		histogramPanel.SetWorkingSet(workingSet)
 	}
 
 	return &AppModel{
-		workingSet:    workingSet,
-		includePanel:  includePanel,
-		excludePanel:  excludePanel,
-		fileListPanel: fileListPanel,
-		focused:       FileTreePanel,
-		width:         80,
-		height:        24,
-		panels:        []FocusedPanel{FileTreePanel, IncludePanel, ExcludePanel, FileListPanel, HistogramPanel, TimeRangePanel},
-		currentPanel:  0,
-		status:        "Ready",
-		ready:         true,
-		quitting:      false,
+		workingSet:     workingSet,
+		includePanel:   includePanel,
+		excludePanel:   excludePanel,
+		fileListPanel:  fileListPanel,
+		histogramPanel: histogramPanel,
+		focused:        FileTreePanel,
+		width:          80,
+		height:         24,
+		panels:         []FocusedPanel{FileTreePanel, IncludePanel, ExcludePanel, FileListPanel, HistogramPanel, TimeRangePanel},
+		currentPanel:   0,
+		status:         "Ready",
+		ready:          true,
+		quitting:       false,
 	}
 }
 
@@ -106,14 +112,25 @@ func (m *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.handleRegexPatternChange(msg)
 
 	case messages.WorkingSetUpdatedMsg:
-		// Handle working set updates (for future components like file list)
+		// Handle working set updates and notify histogram panel
 		m.status = fmt.Sprintf("Working set updated: %d files selected", msg.SelectedCount)
-		return m, nil
+
+		// Forward to histogram panel with proper message type
+		histogramMsg := histogram.WorkingSetUpdatedMsg{WorkingSet: m.workingSet}
+		var cmd tea.Cmd
+		m.histogramPanel, cmd = m.histogramPanel.Update(histogramMsg)
+		return m, cmd
 
 	case filelist.FileListDataMsg:
 		// Forward file list data to the file list component
 		var cmd tea.Cmd
 		m.fileListPanel, cmd = m.fileListPanel.Update(msg)
+		return m, cmd
+
+	case histogram.HistogramDataMsg, histogram.HistogramErrorMsg, histogram.HistogramLoadingMsg:
+		// Forward histogram messages to the histogram component
+		var cmd tea.Cmd
+		m.histogramPanel, cmd = m.histogramPanel.Update(msg)
 		return m, cmd
 
 	case tea.KeyMsg:
@@ -152,6 +169,12 @@ func (m *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			} else if m.focused == FileListPanel {
 				var cmd tea.Cmd
 				m.fileListPanel, cmd = m.fileListPanel.Update(msg)
+				if cmd != nil {
+					cmds = append(cmds, cmd)
+				}
+			} else if m.focused == HistogramPanel {
+				var cmd tea.Cmd
+				m.histogramPanel, cmd = m.histogramPanel.Update(msg)
 				if cmd != nil {
 					cmds = append(cmds, cmd)
 				}
@@ -309,10 +332,18 @@ func (m *AppModel) renderFileListPanel(width, height int) string {
 func (m *AppModel) renderHistogramPanel(width, height int) string {
 	style := m.getPanelStyle(HistogramPanel, width, height)
 
-	title := "Volume Histogram"
-	content := m.renderHistogramContent()
+	// Set component size and focus state
+	m.histogramPanel.SetSize(width-4, height-4) // Account for border and padding
+	if m.focused == HistogramPanel {
+		m.histogramPanel.Focus()
+	} else {
+		m.histogramPanel.Blur()
+	}
 
-	return style.Render(fmt.Sprintf("%s\n\n%s", title, content))
+	// Get the component's view
+	content := m.histogramPanel.View()
+
+	return style.Render(content)
 }
 
 // renderTimeRangePanel renders the time range panel
