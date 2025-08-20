@@ -2,11 +2,14 @@ package ui
 
 import (
 	"fmt"
+	"path/filepath"
+	"regexp"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/cheerioskun/logninja/internal/models"
+	"github.com/cheerioskun/logninja/ui/regex"
 )
 
 // FocusedPanel represents which panel is currently focused
@@ -14,7 +17,8 @@ type FocusedPanel int
 
 const (
 	FileTreePanel FocusedPanel = iota
-	RegexPanel
+	IncludePanel
+	ExcludePanel
 	HistogramPanel
 	TimeRangePanel
 	StatusPanel
@@ -24,6 +28,10 @@ const (
 type AppModel struct {
 	// Core state
 	workingSet *models.WorkingSet
+
+	// UI Components
+	includePanel *regex.SingleModel
+	excludePanel *regex.SingleModel
 
 	// UI state
 	focused      FocusedPanel
@@ -40,12 +48,27 @@ type AppModel struct {
 
 // NewAppModel creates a new application model
 func NewAppModel(workingSet *models.WorkingSet) *AppModel {
+	// Create separate include and exclude panels
+	includePanel := regex.NewSingleModel(regex.IncludeType)
+	excludePanel := regex.NewSingleModel(regex.ExcludeType)
+
+	if workingSet != nil && workingSet.Bundle != nil {
+		var filePaths []string
+		for _, file := range workingSet.Bundle.Files {
+			filePaths = append(filePaths, file.Path)
+		}
+		includePanel.SetFiles(filePaths)
+		excludePanel.SetFiles(filePaths)
+	}
+
 	return &AppModel{
 		workingSet:   workingSet,
+		includePanel: includePanel,
+		excludePanel: excludePanel,
 		focused:      FileTreePanel,
 		width:        80,
 		height:       24,
-		panels:       []FocusedPanel{FileTreePanel, RegexPanel, HistogramPanel, TimeRangePanel},
+		panels:       []FocusedPanel{FileTreePanel, IncludePanel, ExcludePanel, HistogramPanel, TimeRangePanel},
 		currentPanel: 0,
 		status:       "Ready",
 		ready:        true,
@@ -84,6 +107,20 @@ func (m *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Show help (placeholder)
 			m.status = "Help: Tab/Shift+Tab to navigate, q to quit"
 			return m, nil
+
+		default:
+			// Forward message to focused panel
+			if m.focused == IncludePanel {
+				var cmd tea.Cmd
+				m.includePanel, cmd = m.includePanel.Update(msg)
+				m.updateWorkingSetFromRegex()
+				return m, cmd
+			} else if m.focused == ExcludePanel {
+				var cmd tea.Cmd
+				m.excludePanel, cmd = m.excludePanel.Update(msg)
+				m.updateWorkingSetFromRegex()
+				return m, cmd
+			}
 		}
 	}
 
@@ -113,26 +150,27 @@ func (m *AppModel) renderLayout() string {
 	statusHeight := 3
 	contentHeight := m.height - headerHeight - statusHeight
 
-	// Split content area
-	leftWidth := m.width / 2
-	rightWidth := m.width - leftWidth
+	// Split content area - 3 panels on top, 2 on bottom
+	topPanelWidth := m.width / 3
+	bottomPanelWidth := m.width / 2
 	topHeight := contentHeight * 2 / 3
 	bottomHeight := contentHeight - topHeight
 
 	// Create header
 	header := m.renderHeader()
 
-	// Create panel contents (placeholders for now)
-	fileTree := m.renderFileTreePanel(leftWidth, topHeight)
-	regex := m.renderRegexPanel(rightWidth, topHeight)
-	histogram := m.renderHistogramPanel(leftWidth, bottomHeight)
-	timeRange := m.renderTimeRangePanel(rightWidth, bottomHeight)
+	// Create panel contents
+	fileTree := m.renderFileTreePanel(topPanelWidth, topHeight)
+	include := m.renderIncludePanel(topPanelWidth, topHeight)
+	exclude := m.renderExcludePanel(topPanelWidth, topHeight)
+	histogram := m.renderHistogramPanel(bottomPanelWidth, bottomHeight)
+	timeRange := m.renderTimeRangePanel(bottomPanelWidth, bottomHeight)
 
 	// Create status
 	status := m.renderStatusPanel(m.width, statusHeight)
 
 	// Combine panels
-	topRow := lipgloss.JoinHorizontal(lipgloss.Top, fileTree, regex)
+	topRow := lipgloss.JoinHorizontal(lipgloss.Top, fileTree, include, exclude)
 	bottomRow := lipgloss.JoinHorizontal(lipgloss.Top, histogram, timeRange)
 	content := lipgloss.JoinVertical(lipgloss.Left, topRow, bottomRow)
 
@@ -167,27 +205,53 @@ func (m *AppModel) renderHeader() string {
 func (m *AppModel) renderFileTreePanel(width, height int) string {
 	style := m.getPanelStyle(FileTreePanel, width, height)
 
-	title := "📁 File Tree"
+	title := "File Tree"
 	content := m.renderFileTreeContent()
 
 	return style.Render(fmt.Sprintf("%s\n\n%s", title, content))
 }
 
-// renderRegexPanel renders the regex panel
-func (m *AppModel) renderRegexPanel(width, height int) string {
-	style := m.getPanelStyle(RegexPanel, width, height)
+// renderIncludePanel renders the include patterns panel
+func (m *AppModel) renderIncludePanel(width, height int) string {
+	style := m.getPanelStyle(IncludePanel, width, height)
 
-	title := "🔍 Regex Filters"
-	content := m.renderRegexContent()
+	// Set component size and focus state
+	m.includePanel.SetSize(width-4, height-4) // Account for border and padding
+	if m.focused == IncludePanel {
+		m.includePanel.Focus()
+	} else {
+		m.includePanel.Blur()
+	}
 
-	return style.Render(fmt.Sprintf("%s\n\n%s", title, content))
+	// Get the component's view
+	content := m.includePanel.View()
+
+	return style.Render(content)
+}
+
+// renderExcludePanel renders the exclude patterns panel
+func (m *AppModel) renderExcludePanel(width, height int) string {
+	style := m.getPanelStyle(ExcludePanel, width, height)
+
+	// Set component size and focus state
+	m.excludePanel.SetSize(width-4, height-4) // Account for border and padding
+	if m.focused == ExcludePanel {
+		m.excludePanel.Focus()
+	} else {
+		m.excludePanel.Blur()
+	}
+
+	// Get the component's view
+	content := m.excludePanel.View()
+
+	return style.Render(content)
 }
 
 // renderHistogramPanel renders the histogram panel
 func (m *AppModel) renderHistogramPanel(width, height int) string {
 	style := m.getPanelStyle(HistogramPanel, width, height)
 
-	title := "📊 Volume Histogram"
+	title := "Volume Histogram"
 	content := m.renderHistogramContent()
 
 	return style.Render(fmt.Sprintf("%s\n\n%s", title, content))
@@ -197,7 +261,7 @@ func (m *AppModel) renderHistogramPanel(width, height int) string {
 func (m *AppModel) renderTimeRangePanel(width, height int) string {
 	style := m.getPanelStyle(TimeRangePanel, width, height)
 
-	title := "⏰ Time Range"
+	title := "Time Range"
 	content := m.renderTimeRangeContent()
 
 	return style.Render(fmt.Sprintf("%s\n\n%s", title, content))
@@ -342,6 +406,96 @@ func (m *AppModel) nextPanel() {
 func (m *AppModel) prevPanel() {
 	m.currentPanel = (m.currentPanel - 1 + len(m.panels)) % len(m.panels)
 	m.focused = m.panels[m.currentPanel]
+}
+
+// updateWorkingSetFromRegex syncs regex patterns from the components to the working set
+func (m *AppModel) updateWorkingSetFromRegex() {
+	if m.workingSet == nil {
+		return
+	}
+
+	// Get patterns from separate panels
+	includePatterns := m.includePanel.GetPatterns()
+	excludePatterns := m.excludePanel.GetPatterns()
+
+	// Update working set
+	m.workingSet.IncludeRegex = includePatterns
+	m.workingSet.ExcludeRegex = excludePatterns
+
+	// Apply filename filtering to update file selections
+	m.applyRegexFiltering()
+}
+
+// applyRegexFiltering applies regex patterns to filter file selections
+func (m *AppModel) applyRegexFiltering() {
+	if m.workingSet == nil || m.workingSet.Bundle == nil {
+		return
+	}
+
+	// Apply filtering logic manually
+	includePatterns := m.workingSet.IncludeRegex
+	excludePatterns := m.workingSet.ExcludeRegex
+
+	var filteredFiles []string
+
+	for _, file := range m.workingSet.Bundle.Files {
+		filename := file.Path
+
+		// Check include patterns (if any)
+		includeMatch := len(includePatterns) == 0 // Default to true if no include patterns
+		for _, pattern := range includePatterns {
+			if matched, _ := filepath.Match(pattern, filename); matched {
+				includeMatch = true
+				break
+			}
+			// Also try as regex
+			if regex, err := regexp.Compile(pattern); err == nil && regex.MatchString(filename) {
+				includeMatch = true
+				break
+			}
+		}
+
+		if !includeMatch {
+			continue
+		}
+
+		// Check exclude patterns
+		excludeMatch := false
+		for _, pattern := range excludePatterns {
+			if matched, _ := filepath.Match(pattern, filename); matched {
+				excludeMatch = true
+				break
+			}
+			// Also try as regex
+			if regex, err := regexp.Compile(pattern); err == nil && regex.MatchString(filename) {
+				excludeMatch = true
+				break
+			}
+		}
+
+		if !excludeMatch {
+			filteredFiles = append(filteredFiles, filename)
+		}
+	}
+
+	// Convert to set for efficient lookup
+	filteredFileSet := make(map[string]bool)
+	for _, file := range filteredFiles {
+		filteredFileSet[file] = true
+	}
+
+	// Update file selections based on regex filtering
+	for _, file := range m.workingSet.Bundle.Files {
+		// Only keep selected if file passes regex filter
+		if m.workingSet.IsFileSelected(file.Path) {
+			m.workingSet.SetFileSelection(file.Path, filteredFileSet[file.Path])
+		}
+	}
+
+	// Update status
+	selectedCount := m.workingSet.GetSelectedFileCount()
+	totalCount := len(filteredFiles)
+	m.status = fmt.Sprintf("Regex filter: %d/%d files match", selectedCount, totalCount)
 }
 
 func formatBytes(bytes int64) string {
