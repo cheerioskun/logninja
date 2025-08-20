@@ -1,0 +1,66 @@
+# LogNinja Development Rules
+
+## Tech Stack
+- **Language**: Go 1.21+
+- **TUI Framework**: Charm (bubbletea, bubbles, lipgloss)
+- **CLI Framework**: Cobra + Viper
+- **Filesystem**: Afero (FS abstraction for testability)
+- **Build Tool**: Go modules
+- **Testing**: Go standard testing + testify
+
+## Code Style & Standards
+- Follow Go conventions (gofmt, golint, go vet)
+- Use meaningful variable names, avoid abbreviations
+- Prefer composition over inheritance
+- Keep functions small and focused (max 50 lines)
+- Write self-documenting code with minimal comments
+- Use interfaces for testability and modularity
+
+## Architecture Principles
+- **Clean Architecture**: Separate concerns (models, ui, business logic)
+- **Dependency Injection**: Pass dependencies explicitly
+- **Interface Segregation**: Small, focused interfaces
+- **Error Handling**: Always handle errors, use wrapped errors
+- **Performance**: Lazy loading, streaming for large files
+- **Testability**: Write testable code with mocked dependencies
+
+## File Organization
+```
+cmd/           # Application entry points
+internal/      # Private application code
+ui/           # Public TUI components (reusable)
+pkg/          # Public APIs and utilities
+```
+
+## Naming Conventions
+- **Packages**: lowercase, single word when possible
+- **Types**: PascalCase
+- **Functions/Methods**: PascalCase (public), camelCase (private)
+- **Constants**: PascalCase or UPPER_SNAKE_CASE for package-level
+- **Interfaces**: End with 'er' when possible (Parser, Filter)
+
+## Testing Guidelines
+- Unit tests for all public functions
+- Integration tests for complex workflows
+- Table-driven tests for multiple scenarios
+- Use testify for assertions and mocking
+- Aim for 80%+ coverage
+
+## Performance Guidelines
+- Avoid premature optimization
+- Profile before optimizing
+- Use streaming for large files
+- Cache expensive computations
+- Prefer buffered I/O for file operations
+
+## Error Handling
+- Use fmt.Errorf for error wrapping
+- Create custom error types for business logic
+- Log errors at appropriate levels
+- Graceful degradation when possible
+
+## Documentation
+- Document all exported functions and types
+- Include examples in documentation
+- Keep README updated with usage examples
+- Document architectural decisions in ARCHITECTURE.md
