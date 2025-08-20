@@ -8,7 +8,9 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/cheerioskun/logninja/internal/messages"
 	"github.com/cheerioskun/logninja/internal/models"
+	"github.com/cheerioskun/logninja/ui/filelist"
 	"github.com/cheerioskun/logninja/ui/regex"
 )
 
@@ -19,6 +21,7 @@ const (
 	FileTreePanel FocusedPanel = iota
 	IncludePanel
 	ExcludePanel
+	FileListPanel
 	HistogramPanel
 	TimeRangePanel
 	StatusPanel
@@ -30,8 +33,9 @@ type AppModel struct {
 	workingSet *models.WorkingSet
 
 	// UI Components
-	includePanel *regex.SingleModel
-	excludePanel *regex.SingleModel
+	includePanel  *regex.SingleModel
+	excludePanel  *regex.SingleModel
+	fileListPanel *filelist.Model
 
 	// UI state
 	focused      FocusedPanel
@@ -51,6 +55,7 @@ func NewAppModel(workingSet *models.WorkingSet) *AppModel {
 	// Create separate include and exclude panels
 	includePanel := regex.NewSingleModel(regex.IncludeType)
 	excludePanel := regex.NewSingleModel(regex.ExcludeType)
+	fileListPanel := filelist.NewModel()
 
 	if workingSet != nil && workingSet.Bundle != nil {
 		var filePaths []string
@@ -62,32 +67,54 @@ func NewAppModel(workingSet *models.WorkingSet) *AppModel {
 	}
 
 	return &AppModel{
-		workingSet:   workingSet,
-		includePanel: includePanel,
-		excludePanel: excludePanel,
-		focused:      FileTreePanel,
-		width:        80,
-		height:       24,
-		panels:       []FocusedPanel{FileTreePanel, IncludePanel, ExcludePanel, HistogramPanel, TimeRangePanel},
-		currentPanel: 0,
-		status:       "Ready",
-		ready:        true,
-		quitting:     false,
+		workingSet:    workingSet,
+		includePanel:  includePanel,
+		excludePanel:  excludePanel,
+		fileListPanel: fileListPanel,
+		focused:       FileTreePanel,
+		width:         80,
+		height:        24,
+		panels:        []FocusedPanel{FileTreePanel, IncludePanel, ExcludePanel, FileListPanel, HistogramPanel, TimeRangePanel},
+		currentPanel:  0,
+		status:        "Ready",
+		ready:         true,
+		quitting:      false,
 	}
 }
 
 // Init implements tea.Model
 func (m *AppModel) Init() tea.Cmd {
+	// Initialize components with initial data
+	if m.workingSet != nil {
+		return m.broadcastWorkingSetUpdate()
+	}
 	return nil
 }
 
 // Update implements tea.Model
 func (m *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	var cmds []tea.Cmd
+
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
 		return m, nil
+
+	case messages.RegexPatternsChangedMsg:
+		// Handle regex pattern changes
+		return m, m.handleRegexPatternChange(msg)
+
+	case messages.WorkingSetUpdatedMsg:
+		// Handle working set updates (for future components like file list)
+		m.status = fmt.Sprintf("Working set updated: %d files selected", msg.SelectedCount)
+		return m, nil
+
+	case filelist.FileListDataMsg:
+		// Forward file list data to the file list component
+		var cmd tea.Cmd
+		m.fileListPanel, cmd = m.fileListPanel.Update(msg)
+		return m, cmd
 
 	case tea.KeyMsg:
 		switch msg.String() {
@@ -109,21 +136,33 @@ func (m *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 
 		default:
-			// Forward message to focused panel
+			// Forward message to focused panel and collect commands
 			if m.focused == IncludePanel {
 				var cmd tea.Cmd
 				m.includePanel, cmd = m.includePanel.Update(msg)
-				m.updateWorkingSetFromRegex()
-				return m, cmd
+				if cmd != nil {
+					cmds = append(cmds, cmd)
+				}
 			} else if m.focused == ExcludePanel {
 				var cmd tea.Cmd
 				m.excludePanel, cmd = m.excludePanel.Update(msg)
-				m.updateWorkingSetFromRegex()
-				return m, cmd
+				if cmd != nil {
+					cmds = append(cmds, cmd)
+				}
+			} else if m.focused == FileListPanel {
+				var cmd tea.Cmd
+				m.fileListPanel, cmd = m.fileListPanel.Update(msg)
+				if cmd != nil {
+					cmds = append(cmds, cmd)
+				}
 			}
 		}
 	}
 
+	// Return batched commands if any
+	if len(cmds) > 0 {
+		return m, tea.Batch(cmds...)
+	}
 	return m, nil
 }
 
@@ -150,9 +189,9 @@ func (m *AppModel) renderLayout() string {
 	statusHeight := 3
 	contentHeight := m.height - headerHeight - statusHeight
 
-	// Split content area - 3 panels on top, 2 on bottom
+	// Split content area - 3 panels on top, 3 on bottom
 	topPanelWidth := m.width / 3
-	bottomPanelWidth := m.width / 2
+	bottomPanelWidth := m.width / 3
 	topHeight := contentHeight * 2 / 3
 	bottomHeight := contentHeight - topHeight
 
@@ -163,6 +202,7 @@ func (m *AppModel) renderLayout() string {
 	fileTree := m.renderFileTreePanel(topPanelWidth, topHeight)
 	include := m.renderIncludePanel(topPanelWidth, topHeight)
 	exclude := m.renderExcludePanel(topPanelWidth, topHeight)
+	fileList := m.renderFileListPanel(bottomPanelWidth, bottomHeight)
 	histogram := m.renderHistogramPanel(bottomPanelWidth, bottomHeight)
 	timeRange := m.renderTimeRangePanel(bottomPanelWidth, bottomHeight)
 
@@ -171,7 +211,7 @@ func (m *AppModel) renderLayout() string {
 
 	// Combine panels
 	topRow := lipgloss.JoinHorizontal(lipgloss.Top, fileTree, include, exclude)
-	bottomRow := lipgloss.JoinHorizontal(lipgloss.Top, histogram, timeRange)
+	bottomRow := lipgloss.JoinHorizontal(lipgloss.Top, fileList, histogram, timeRange)
 	content := lipgloss.JoinVertical(lipgloss.Left, topRow, bottomRow)
 
 	// Combine all
@@ -243,6 +283,24 @@ func (m *AppModel) renderExcludePanel(width, height int) string {
 
 	// Get the component's view
 	content := m.excludePanel.View()
+
+	return style.Render(content)
+}
+
+// renderFileListPanel renders the file list panel
+func (m *AppModel) renderFileListPanel(width, height int) string {
+	style := m.getPanelStyle(FileListPanel, width, height)
+
+	// Set component size and focus state
+	m.fileListPanel.SetSize(width-4, height-4) // Account for border and padding
+	if m.focused == FileListPanel {
+		m.fileListPanel.Focus()
+	} else {
+		m.fileListPanel.Blur()
+	}
+
+	// Get the component's view
+	content := m.fileListPanel.View()
 
 	return style.Render(content)
 }
@@ -408,73 +466,149 @@ func (m *AppModel) prevPanel() {
 	m.focused = m.panels[m.currentPanel]
 }
 
-// updateWorkingSetFromRegex syncs regex patterns from the components to the working set
-func (m *AppModel) updateWorkingSetFromRegex() {
+// handleRegexPatternChange processes regex pattern change messages
+func (m *AppModel) handleRegexPatternChange(msg messages.RegexPatternsChangedMsg) tea.Cmd {
 	if m.workingSet == nil {
-		return
+		return nil
 	}
 
-	// Get patterns from separate panels
-	includePatterns := m.includePanel.GetPatterns()
-	excludePatterns := m.excludePanel.GetPatterns()
+	// Update the appropriate pattern list based on message type
+	switch msg.Type {
+	case messages.IncludePatternType:
+		m.workingSet.IncludeRegex = msg.Patterns
+	case messages.ExcludePatternType:
+		m.workingSet.ExcludeRegex = msg.Patterns
+	}
 
-	// Update working set
-	m.workingSet.IncludeRegex = includePatterns
-	m.workingSet.ExcludeRegex = excludePatterns
-
-	// Apply filename filtering to update file selections
+	// Apply filtering and broadcast the update
 	m.applyRegexFiltering()
+
+	// Return command to broadcast working set update to other components
+	return m.broadcastWorkingSetUpdate()
+}
+
+// broadcastWorkingSetUpdate creates a command to notify other components of working set changes
+func (m *AppModel) broadcastWorkingSetUpdate() tea.Cmd {
+	if m.workingSet == nil {
+		return nil
+	}
+
+	selectedCount := m.workingSet.GetSelectedFileCount()
+	totalSize := m.workingSet.GetSelectedTotalSize()
+
+	// Get list of filtered files for other components
+	filteredFiles := m.getFilteredFileNames()
+
+	// Get all files sorted by size for the file list component
+	allFiles := m.workingSet.GetSelectedFilesBySize(0)
+
+	// Return batched commands for different components
+	return tea.Batch(
+		func() tea.Msg {
+			return messages.WorkingSetUpdatedMsg{
+				SelectedCount: selectedCount,
+				TotalMatched:  len(filteredFiles),
+				FilteredFiles: filteredFiles,
+				TotalSize:     totalSize,
+			}
+		},
+		func() tea.Msg {
+			return filelist.FileListDataMsg{
+				Files:      allFiles,
+				TotalSize:  totalSize,
+				TotalFiles: selectedCount,
+			}
+		},
+	)
+}
+
+// getFilteredFileNames returns the names of files that pass the current filters
+func (m *AppModel) getFilteredFileNames() []string {
+	if m.workingSet == nil || m.workingSet.Bundle == nil {
+		return []string{}
+	}
+
+	var filteredFiles []string
+	for _, file := range m.workingSet.Bundle.Files {
+		if m.workingSet.IsFileSelected(file.Path) {
+			filteredFiles = append(filteredFiles, file.Path)
+		}
+	}
+	return filteredFiles
 }
 
 // applyRegexFiltering applies regex patterns to filter file selections
+// First applies all include patterns, then applies all exclude patterns
 func (m *AppModel) applyRegexFiltering() {
 	if m.workingSet == nil || m.workingSet.Bundle == nil {
 		return
 	}
 
-	// Apply filtering logic manually
 	includePatterns := m.workingSet.IncludeRegex
 	excludePatterns := m.workingSet.ExcludeRegex
 
-	var filteredFiles []string
-
-	for _, file := range m.workingSet.Bundle.Files {
-		filename := file.Path
-
-		// Check include patterns (if any)
-		includeMatch := len(includePatterns) == 0 // Default to true if no include patterns
+	// Step 1: Apply include patterns to get initial set
+	// If no include patterns, start with all files
+	var includedFiles []string
+	if len(includePatterns) == 0 {
+		// No include patterns means include all files
+		for _, file := range m.workingSet.Bundle.Files {
+			includedFiles = append(includedFiles, file.Path)
+		}
+	} else {
+		// Apply all include patterns
+		includedFileSet := make(map[string]bool)
 		for _, pattern := range includePatterns {
-			if matched, _ := filepath.Match(pattern, filename); matched {
-				includeMatch = true
-				break
-			}
-			// Also try as regex
-			if regex, err := regexp.Compile(pattern); err == nil && regex.MatchString(filename) {
-				includeMatch = true
-				break
+			for _, file := range m.workingSet.Bundle.Files {
+				filename := file.Path
+
+				// Try filepath pattern matching
+				if matched, _ := filepath.Match(pattern, filename); matched {
+					includedFileSet[filename] = true
+					continue
+				}
+
+				// Try regex pattern matching
+				if regex, err := regexp.Compile(pattern); err == nil && regex.MatchString(filename) {
+					includedFileSet[filename] = true
+				}
 			}
 		}
 
-		if !includeMatch {
-			continue
+		// Convert set to slice
+		for filename := range includedFileSet {
+			includedFiles = append(includedFiles, filename)
 		}
+	}
 
-		// Check exclude patterns
-		excludeMatch := false
+	// Step 2: Apply exclude patterns to remove files from included set
+	var filteredFiles []string
+	if len(excludePatterns) == 0 {
+		// No exclude patterns means keep all included files
+		filteredFiles = includedFiles
+	} else {
+		// Apply all exclude patterns
+		excludedFileSet := make(map[string]bool)
 		for _, pattern := range excludePatterns {
-			if matched, _ := filepath.Match(pattern, filename); matched {
-				excludeMatch = true
-				break
-			}
-			// Also try as regex
-			if regex, err := regexp.Compile(pattern); err == nil && regex.MatchString(filename) {
-				excludeMatch = true
-				break
+			for _, filename := range includedFiles {
+				// Try filepath pattern matching
+				if matched, _ := filepath.Match(pattern, filename); matched {
+					excludedFileSet[filename] = true
+					continue
+				}
+
+				// Try regex pattern matching
+				if regex, err := regexp.Compile(pattern); err == nil && regex.MatchString(filename) {
+					excludedFileSet[filename] = true
+				}
 			}
 		}
 
-		if !excludeMatch {
-			filteredFiles = append(filteredFiles, filename)
+		// Keep files that weren't excluded
+		for _, filename := range includedFiles {
+			if !excludedFileSet[filename] {
+				filteredFiles = append(filteredFiles, filename)
+			}
 		}
 	}
 
@@ -485,17 +619,38 @@ func (m *AppModel) applyRegexFiltering() {
 	}
 
 	// Update file selections based on regex filtering
+	// We need to reset all selections and then apply the filter
+	// First, reset to original selection state (log files)
 	for _, file := range m.workingSet.Bundle.Files {
-		// Only keep selected if file passes regex filter
-		if m.workingSet.IsFileSelected(file.Path) {
-			m.workingSet.SetFileSelection(file.Path, filteredFileSet[file.Path])
-		}
+		originallySelected := file.IsLogFile // Could be enhanced to track user selections
+		passesFilter := filteredFileSet[file.Path]
+
+		// File is selected if it was originally selected AND passes the filter
+		shouldBeSelected := originallySelected && passesFilter
+		m.workingSet.SetFileSelection(file.Path, shouldBeSelected)
 	}
 
-	// Update status
+	// Update status with more detailed info
 	selectedCount := m.workingSet.GetSelectedFileCount()
 	totalCount := len(filteredFiles)
-	m.status = fmt.Sprintf("Regex filter: %d/%d files match", selectedCount, totalCount)
+	includedCount := len(includedFiles)
+
+	statusParts := []string{
+		fmt.Sprintf("%d files selected", selectedCount),
+	}
+
+	if len(includePatterns) > 0 {
+		statusParts = append(statusParts, fmt.Sprintf("%d included", includedCount))
+	}
+
+	if len(excludePatterns) > 0 {
+		excludedCount := includedCount - totalCount
+		statusParts = append(statusParts, fmt.Sprintf("%d excluded", excludedCount))
+	}
+
+	statusParts = append(statusParts, fmt.Sprintf("%d final", totalCount))
+
+	m.status = fmt.Sprintf("Filter: %s", strings.Join(statusParts, ", "))
 }
 
 func formatBytes(bytes int64) string {

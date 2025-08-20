@@ -170,3 +170,48 @@ func (ws *WorkingSet) GetEffectiveTimeRange() *TimeRange {
 	}
 	return nil
 }
+
+// GetSelectedFilesBySize returns selected files sorted by size (descending)
+func (ws *WorkingSet) GetSelectedFilesBySize(limit int) []FileInfo {
+	if ws.Bundle == nil {
+		return []FileInfo{}
+	}
+
+	var selectedFiles []FileInfo
+	for _, file := range ws.Bundle.Files {
+		if ws.IsFileSelected(file.Path) {
+			selectedFiles = append(selectedFiles, file)
+		}
+	}
+
+	// Sort by size descending (largest first)
+	for i := 0; i < len(selectedFiles)-1; i++ {
+		for j := i + 1; j < len(selectedFiles); j++ {
+			if selectedFiles[i].Size < selectedFiles[j].Size {
+				selectedFiles[i], selectedFiles[j] = selectedFiles[j], selectedFiles[i]
+			}
+		}
+	}
+
+	// Apply limit
+	if limit > 0 && limit < len(selectedFiles) {
+		selectedFiles = selectedFiles[:limit]
+	}
+
+	return selectedFiles
+}
+
+// GetSelectedTotalSize returns the total size of all selected files
+func (ws *WorkingSet) GetSelectedTotalSize() int64 {
+	if ws.Bundle == nil {
+		return 0
+	}
+
+	var totalSize int64
+	for _, file := range ws.Bundle.Files {
+		if ws.IsFileSelected(file.Path) {
+			totalSize += file.Size
+		}
+	}
+	return totalSize
+}

@@ -8,6 +8,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/cheerioskun/logninja/internal/messages"
 )
 
 // PatternType represents whether this is for include or exclude patterns
@@ -81,7 +82,7 @@ func (m *SingleModel) Update(msg tea.Msg) (*SingleModel, tea.Cmd) {
 		case tea.KeyMsg:
 			switch msg.String() {
 			case "enter":
-				return m.confirmEdit(), nil
+				return m.confirmEdit()
 			case "esc":
 				return m.cancelEdit(), nil
 			default:
@@ -109,7 +110,8 @@ func (m *SingleModel) Update(msg tea.Msg) (*SingleModel, tea.Cmd) {
 				m.startEditPattern()
 			}
 		case "d", "delete":
-			m.deletePattern()
+			cmd = m.deletePattern()
+			return m, cmd
 		case "enter":
 			if m.hasPatternAtCursor() {
 				m.startEditPattern()
@@ -371,10 +373,11 @@ func (m *SingleModel) startEditPattern() {
 	m.editInput.Focus()
 }
 
-func (m *SingleModel) confirmEdit() *SingleModel {
+func (m *SingleModel) confirmEdit() (*SingleModel, tea.Cmd) {
 	value := strings.TrimSpace(m.editInput.Value())
 	if value == "" {
-		return m.cancelEdit()
+		model := m.cancelEdit()
+		return model, nil
 	}
 
 	pattern := m.compilePattern(value)
@@ -389,7 +392,10 @@ func (m *SingleModel) confirmEdit() *SingleModel {
 	}
 
 	m.testPatterns()
-	return m.cancelEdit()
+	model := m.cancelEdit()
+
+	// Emit message to notify parent of pattern changes
+	return model, m.emitPatternsChangedCmd()
 }
 
 func (m *SingleModel) cancelEdit() *SingleModel {
@@ -400,9 +406,9 @@ func (m *SingleModel) cancelEdit() *SingleModel {
 	return m
 }
 
-func (m *SingleModel) deletePattern() {
+func (m *SingleModel) deletePattern() tea.Cmd {
 	if !m.hasPatternAtCursor() {
-		return
+		return nil
 	}
 
 	m.patterns = append(m.patterns[:m.cursor], m.patterns[m.cursor+1:]...)
@@ -415,6 +421,9 @@ func (m *SingleModel) deletePattern() {
 	}
 
 	m.testPatterns()
+
+	// Emit message to notify parent of pattern changes
+	return m.emitPatternsChangedCmd()
 }
 
 func (m *SingleModel) compilePattern(text string) Pattern {
@@ -456,4 +465,30 @@ func (m *SingleModel) countMatches(pattern *Pattern) int {
 		}
 	}
 	return count
+}
+
+// emitPatternsChangedCmd creates a command that emits a RegexPatternsChangedMsg
+func (m *SingleModel) emitPatternsChangedCmd() tea.Cmd {
+	return func() tea.Msg {
+		var msgType messages.RegexPatternType
+		if m.patternType == IncludeType {
+			msgType = messages.IncludePatternType
+		} else {
+			msgType = messages.ExcludePatternType
+		}
+
+		return messages.RegexPatternsChangedMsg{
+			Type:            msgType,
+			Patterns:        m.GetPatterns(),
+			SourceComponent: m.getComponentName(),
+		}
+	}
+}
+
+// getComponentName returns a descriptive name for this component
+func (m *SingleModel) getComponentName() string {
+	if m.patternType == IncludeType {
+		return "include-panel"
+	}
+	return "exclude-panel"
 }
