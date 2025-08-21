@@ -11,6 +11,39 @@ import (
 	"github.com/cheerioskun/logninja/internal/messages"
 )
 
+// Styling constants
+var (
+	// Colors
+	primaryColor   = lipgloss.Color("205")
+	secondaryColor = lipgloss.Color("240")
+	successColor   = lipgloss.Color("46")
+	errorColor     = lipgloss.Color("196")
+	warningColor   = lipgloss.Color("214")
+
+	// Base styles
+	headerStyle = lipgloss.NewStyle().
+			Bold(true).
+			Padding(0, 1)
+
+	helpStyle = lipgloss.NewStyle().
+			Foreground(secondaryColor).
+			Italic(true).
+			Padding(0, 1)
+
+	editInputStyle = lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			Padding(0, 1).
+			Margin(0, 0, 1, 0)
+
+	selectedPatternStyle = lipgloss.NewStyle().
+				Background(primaryColor).
+				Foreground(lipgloss.Color("0")).
+				Padding(0, 1)
+
+	patternStyle = lipgloss.NewStyle().
+			Padding(0, 1)
+)
+
 // PatternType represents whether this is for include or exclude patterns
 type PatternType int
 
