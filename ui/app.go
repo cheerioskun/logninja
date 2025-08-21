@@ -6,8 +6,10 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/cheerioskun/logninja/internal/export"
 	"github.com/cheerioskun/logninja/internal/messages"
 	"github.com/cheerioskun/logninja/internal/models"
+	exportui "github.com/cheerioskun/logninja/ui/export"
 	"github.com/cheerioskun/logninja/ui/filelist"
 	"github.com/cheerioskun/logninja/ui/regex"
 	"github.com/spf13/afero"
@@ -27,9 +29,13 @@ type AppModel struct {
 	// Core state
 	workingSet *models.WorkingSet
 
+	// Services
+	exportService *export.Service
+
 	// UI Components
 	regexPanel    *regex.Model
 	fileListPanel *filelist.Model
+	exportModal   *exportui.Model
 
 	// UI state
 	focused      FocusedPanel
@@ -46,9 +52,13 @@ type AppModel struct {
 
 // NewAppModel creates a new application model
 func NewAppModel(workingSet *models.WorkingSet, fs afero.Fs) *AppModel {
+	// Create services
+	exportService := export.NewService(fs)
+
 	// Create the two working panels
 	regexPanel := regex.NewModel()
 	fileListPanel := filelist.NewModel()
+	exportModal := exportui.NewModel(exportService)
 
 	if workingSet != nil && workingSet.Bundle != nil {
 		var filePaths []string
@@ -60,8 +70,10 @@ func NewAppModel(workingSet *models.WorkingSet, fs afero.Fs) *AppModel {
 
 	return &AppModel{
 		workingSet:    workingSet,
+		exportService: exportService,
 		regexPanel:    regexPanel,
 		fileListPanel: fileListPanel,
+		exportModal:   exportModal,
 		focused:       RegexPanel,
 		width:         80,
 		height:        24,
@@ -90,6 +102,7 @@ func (m *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+		m.exportModal.SetSize(msg.Width, msg.Height)
 		return m, nil
 
 	case messages.RegexFiltersChangedMsg:
@@ -107,6 +120,27 @@ func (m *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.fileListPanel, cmd = m.fileListPanel.Update(msg)
 		return m, cmd
 
+	case exportui.ExportModalConfirmedMsg:
+		m.status = "Export started..."
+		return m, nil
+
+	case exportui.ExportModalCancelledMsg:
+		m.status = "Export cancelled"
+		return m, nil
+
+	case exportui.ExportModalCompletedMsg:
+		// Handle completion message for status updates
+		if msg.Success {
+			fileCount := 0
+			if msg.Summary != nil {
+				fileCount = msg.Summary.FileCount
+			}
+			m.status = fmt.Sprintf("Export completed: %d files exported", fileCount)
+		} else {
+			m.status = fmt.Sprintf("Export failed: %v", msg.Error)
+		}
+		return m, nil
+
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "ctrl+c", "q":
@@ -123,24 +157,45 @@ func (m *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case "?":
 			// Show help (placeholder)
-			m.status = "Help: Tab/Shift+Tab to navigate, q to quit"
+			m.status = "Help: Tab/Shift+Tab to navigate, Shift+E to export, q to quit"
+			return m, nil
+
+		case "E":
+			// Show export modal (Shift+E)
+			if m.workingSet != nil {
+				cmd := m.exportModal.Show(m.workingSet)
+				m.status = "Export modal opened"
+				return m, cmd
+			}
+			m.status = "No working set available for export"
 			return m, nil
 
 		default:
-			// Forward message to focused panel and collect commands
-			if m.focused == RegexPanel {
-				var cmd tea.Cmd
-				m.regexPanel, cmd = m.regexPanel.Update(msg)
-				if cmd != nil {
-					cmds = append(cmds, cmd)
-				}
-			} else if m.focused == FileListPanel {
-				var cmd tea.Cmd
-				m.fileListPanel, cmd = m.fileListPanel.Update(msg)
-				if cmd != nil {
-					cmds = append(cmds, cmd)
+			// Forward message to focused panel and collect commands only if modal is not visible
+			if !m.exportModal.IsVisible() {
+				if m.focused == RegexPanel {
+					var cmd tea.Cmd
+					m.regexPanel, cmd = m.regexPanel.Update(msg)
+					if cmd != nil {
+						cmds = append(cmds, cmd)
+					}
+				} else if m.focused == FileListPanel {
+					var cmd tea.Cmd
+					m.fileListPanel, cmd = m.fileListPanel.Update(msg)
+					if cmd != nil {
+						cmds = append(cmds, cmd)
+					}
 				}
 			}
+		}
+	}
+
+	// Update export modal for all messages when visible, or for non-keyboard messages when hidden
+	if m.exportModal.IsVisible() || !isKeyboardMsg(msg) {
+		var modalCmd tea.Cmd
+		m.exportModal, modalCmd = m.exportModal.Update(msg)
+		if modalCmd != nil {
+			cmds = append(cmds, modalCmd)
 		}
 	}
 
@@ -163,6 +218,15 @@ func (m *AppModel) View() string {
 
 	// Create layout
 	content := m.renderLayout()
+
+	// Render export modal overlay if visible
+	if m.exportModal.IsVisible() {
+		modalView := m.exportModal.View()
+		if modalView != "" {
+			// Replace content with modal (modal handles its own positioning)
+			content = modalView
+		}
+	}
 
 	return content
 }
@@ -427,4 +491,10 @@ func formatBytes(bytes int64) string {
 		exp++
 	}
 	return fmt.Sprintf("%.1f %cB", float64(bytes)/float64(div), "KMGTPE"[exp])
+}
+
+// isKeyboardMsg checks if a message is a keyboard message
+func isKeyboardMsg(msg tea.Msg) bool {
+	_, ok := msg.(tea.KeyMsg)
+	return ok
 }

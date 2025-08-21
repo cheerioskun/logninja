@@ -1,5 +1,9 @@
 # LogNinja Development Rules
 
+## META RULES
+- Do NOT jump the gun. Whenever making big changes or implementing new features, refer to the user for approval, guidance and any suggestions.
+- At such time, put forth a plan and be prepared to elaborate on it if needed.
+
 ## Tech Stack
 - **Language**: Go 1.21+
 - **TUI Framework**: Charm (bubbletea, bubbles, lipgloss)
