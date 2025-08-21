@@ -10,6 +10,10 @@ import (
 	"github.com/spf13/afero"
 )
 
+var (
+	Disabled = true
+)
+
 // Model represents the histogram panel state
 type Model struct {
 	// Data
@@ -54,6 +58,10 @@ func NewModel(fs afero.Fs) *Model {
 
 // Update handles messages for the histogram panel
 func (m *Model) Update(msg tea.Msg) (*Model, tea.Cmd) {
+	if Disabled {
+		return m, nil
+	}
+
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		if !m.focused {
@@ -117,6 +125,10 @@ func (m *Model) Update(msg tea.Msg) (*Model, tea.Cmd) {
 
 // View renders the histogram panel
 func (m *Model) View() string {
+	if Disabled {
+		return ""
+	}
+
 	if m.loading {
 		return m.renderLoading()
 	}
