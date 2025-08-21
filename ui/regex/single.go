@@ -243,9 +243,6 @@ func (m *Model) renderNormalMode() string {
 			Render(title + " *")
 	}
 
-	// Content
-	content := m.renderPatterns()
-
 	// Help
 	help := ""
 	if m.focused {
@@ -260,7 +257,22 @@ func (m *Model) renderNormalMode() string {
 		help = helpStyle.Render(strings.Join(helpItems, " • "))
 	}
 
-	return lipgloss.JoinVertical(lipgloss.Left, header, content, help)
+	// Calculate available space for content
+	headerHeight := lipgloss.Height(header)
+	helpHeight := lipgloss.Height(help)
+	contentHeight := m.height - headerHeight - helpHeight
+
+	if contentHeight < 1 {
+		contentHeight = 1
+	}
+
+	// Content constrained to available height
+	content := m.renderPatterns()
+	constrainedContent := lipgloss.NewStyle().
+		Height(contentHeight).
+		Render(content)
+
+	return lipgloss.JoinVertical(lipgloss.Left, header, constrainedContent, help)
 }
 
 func (m *Model) renderEditMode() string {

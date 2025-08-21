@@ -9,7 +9,6 @@ import (
 	"github.com/cheerioskun/logninja/internal/messages"
 	"github.com/cheerioskun/logninja/internal/models"
 	"github.com/cheerioskun/logninja/ui/filelist"
-	"github.com/cheerioskun/logninja/ui/histogram"
 	"github.com/cheerioskun/logninja/ui/regex"
 	"github.com/spf13/afero"
 )
@@ -18,11 +17,8 @@ import (
 type FocusedPanel int
 
 const (
-	FileTreePanel FocusedPanel = iota
-	RegexPanel
+	RegexPanel FocusedPanel = iota
 	FileListPanel
-	HistogramPanel
-	TimeRangePanel
 	StatusPanel
 )
 
@@ -32,9 +28,8 @@ type AppModel struct {
 	workingSet *models.WorkingSet
 
 	// UI Components
-	regexPanel     *regex.Model
-	fileListPanel  *filelist.Model
-	histogramPanel *histogram.Model
+	regexPanel    *regex.Model
+	fileListPanel *filelist.Model
 
 	// UI state
 	focused      FocusedPanel
@@ -51,10 +46,9 @@ type AppModel struct {
 
 // NewAppModel creates a new application model
 func NewAppModel(workingSet *models.WorkingSet, fs afero.Fs) *AppModel {
-	// Create unified regex panel
+	// Create the two working panels
 	regexPanel := regex.NewModel()
 	fileListPanel := filelist.NewModel()
-	histogramPanel := histogram.NewModel(fs)
 
 	if workingSet != nil && workingSet.Bundle != nil {
 		var filePaths []string
@@ -62,22 +56,20 @@ func NewAppModel(workingSet *models.WorkingSet, fs afero.Fs) *AppModel {
 			filePaths = append(filePaths, file.Path)
 		}
 		regexPanel.SetFiles(filePaths)
-		histogramPanel.SetWorkingSet(workingSet)
 	}
 
 	return &AppModel{
-		workingSet:     workingSet,
-		regexPanel:     regexPanel,
-		fileListPanel:  fileListPanel,
-		histogramPanel: histogramPanel,
-		focused:        FileListPanel,
-		width:          80,
-		height:         24,
-		panels:         []FocusedPanel{FileListPanel, RegexPanel, HistogramPanel},
-		currentPanel:   0,
-		status:         "Ready",
-		ready:          true,
-		quitting:       false,
+		workingSet:    workingSet,
+		regexPanel:    regexPanel,
+		fileListPanel: fileListPanel,
+		focused:       RegexPanel,
+		width:         80,
+		height:        24,
+		panels:        []FocusedPanel{RegexPanel, FileListPanel},
+		currentPanel:  0,
+		status:        "Ready",
+		ready:         true,
+		quitting:      false,
 	}
 }
 
@@ -105,25 +97,14 @@ func (m *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.handleRegexFiltersChange(msg)
 
 	case messages.WorkingSetUpdatedMsg:
-		// Handle working set updates and notify histogram panel
+		// Handle working set updates
 		m.status = fmt.Sprintf("Working set updated: %d files selected", msg.SelectedCount)
-
-		// Forward to histogram panel with proper message type
-		histogramMsg := histogram.WorkingSetUpdatedMsg{WorkingSet: m.workingSet}
-		var cmd tea.Cmd
-		m.histogramPanel, cmd = m.histogramPanel.Update(histogramMsg)
-		return m, cmd
+		return m, nil
 
 	case filelist.FileListDataMsg:
 		// Forward file list data to the file list component
 		var cmd tea.Cmd
 		m.fileListPanel, cmd = m.fileListPanel.Update(msg)
-		return m, cmd
-
-	case histogram.HistogramDataMsg, histogram.HistogramErrorMsg, histogram.HistogramLoadingMsg:
-		// Forward histogram messages to the histogram component
-		var cmd tea.Cmd
-		m.histogramPanel, cmd = m.histogramPanel.Update(msg)
 		return m, cmd
 
 	case tea.KeyMsg:
@@ -156,12 +137,6 @@ func (m *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			} else if m.focused == FileListPanel {
 				var cmd tea.Cmd
 				m.fileListPanel, cmd = m.fileListPanel.Update(msg)
-				if cmd != nil {
-					cmds = append(cmds, cmd)
-				}
-			} else if m.focused == HistogramPanel {
-				var cmd tea.Cmd
-				m.histogramPanel, cmd = m.histogramPanel.Update(msg)
 				if cmd != nil {
 					cmds = append(cmds, cmd)
 				}
@@ -199,29 +174,21 @@ func (m *AppModel) renderLayout() string {
 	statusHeight := 3
 	contentHeight := m.height - headerHeight - statusHeight
 
-	// Split content area - 3 panels on top, 3 on bottom
-	topPanelWidth := m.width / 3
-	bottomPanelWidth := m.width / 3
-	topHeight := contentHeight * 2 / 3
-	bottomHeight := contentHeight - topHeight
+	// Split content area into two equal panels side by side
+	panelWidth := m.width / 2
 
 	// Create header
 	header := m.renderHeader()
 
-	// Create panel contents
-	fileTree := m.renderFileTreePanel(topPanelWidth, topHeight)
-	regexPanel := m.renderRegexPanel(topPanelWidth, topHeight)
-	fileList := m.renderFileListPanel(bottomPanelWidth, bottomHeight)
-	histogram := m.renderHistogramPanel(bottomPanelWidth, bottomHeight)
-	timeRange := m.renderTimeRangePanel(bottomPanelWidth, bottomHeight)
+	// Create the two working panels
+	regexPanel := m.renderRegexPanel(panelWidth, contentHeight)
+	fileListPanel := m.renderFileListPanel(panelWidth, contentHeight)
 
 	// Create status
 	status := m.renderStatusPanel(m.width, statusHeight)
 
-	// Combine panels
-	topRow := lipgloss.JoinHorizontal(lipgloss.Top, fileTree, regexPanel)
-	bottomRow := lipgloss.JoinHorizontal(lipgloss.Top, fileList, histogram, timeRange)
-	content := lipgloss.JoinVertical(lipgloss.Left, topRow, bottomRow)
+	// Combine panels side by side
+	content := lipgloss.JoinHorizontal(lipgloss.Top, regexPanel, fileListPanel)
 
 	// Combine all
 	return lipgloss.JoinVertical(lipgloss.Left, header, content, status)
@@ -248,16 +215,6 @@ func (m *AppModel) renderHeader() string {
 		Render("Tab: Navigate | ?: Help | q: Quit")
 
 	return lipgloss.JoinVertical(lipgloss.Left, title, path, help)
-}
-
-// renderFileTreePanel renders the file tree panel
-func (m *AppModel) renderFileTreePanel(width, height int) string {
-	style := m.getPanelStyle(FileTreePanel, width, height)
-
-	title := "File Tree"
-	content := m.renderFileTreeContent()
-
-	return style.Render(fmt.Sprintf("%s\n\n%s", title, content))
 }
 
 // renderRegexPanel renders the unified regex patterns panel
@@ -296,34 +253,6 @@ func (m *AppModel) renderFileListPanel(width, height int) string {
 	return style.Render(content)
 }
 
-// renderHistogramPanel renders the histogram panel
-func (m *AppModel) renderHistogramPanel(width, height int) string {
-	style := m.getPanelStyle(HistogramPanel, width, height)
-
-	// Set component size and focus state
-	m.histogramPanel.SetSize(width-4, height-4) // Account for border and padding
-	if m.focused == HistogramPanel {
-		m.histogramPanel.Focus()
-	} else {
-		m.histogramPanel.Blur()
-	}
-
-	// Get the component's view
-	content := m.histogramPanel.View()
-
-	return style.Render(content)
-}
-
-// renderTimeRangePanel renders the time range panel
-func (m *AppModel) renderTimeRangePanel(width, height int) string {
-	style := m.getPanelStyle(TimeRangePanel, width, height)
-
-	title := "Time Range"
-	content := m.renderTimeRangeContent()
-
-	return style.Render(fmt.Sprintf("%s\n\n%s", title, content))
-}
-
 // renderStatusPanel renders the status panel
 func (m *AppModel) renderStatusPanel(width, height int) string {
 	style := lipgloss.NewStyle().
@@ -344,113 +273,12 @@ func (m *AppModel) renderStatusPanel(width, height int) string {
 
 		statusParts = append(statusParts,
 			fmt.Sprintf("Files: %d/%d selected", selectedCount, totalCount),
-			fmt.Sprintf("Size: %s", formatBytes(m.workingSet.EstimatedSize)),
+			fmt.Sprintf("Size: %s", formatBytes(m.workingSet.GetSelectedTotalSize())),
 			fmt.Sprintf("Status: %s", m.status),
 		)
 	}
 
 	return style.Render(strings.Join(statusParts, " | "))
-}
-
-// Panel content rendering methods (placeholders for Phase 1)
-
-func (m *AppModel) renderFileTreeContent() string {
-	if m.workingSet == nil || m.workingSet.Bundle == nil {
-		return "No bundle loaded"
-	}
-
-	var lines []string
-	lines = append(lines, fmt.Sprintf("Total files: %d", len(m.workingSet.Bundle.Files)))
-	lines = append(lines, fmt.Sprintf("Log files: %d", m.workingSet.Bundle.Metadata.LogFileCount))
-
-	// Show first few files as example
-	for i, file := range m.workingSet.Bundle.Files {
-		if i >= 10 { // Limit to first 10 files for now
-			lines = append(lines, "...")
-			break
-		}
-
-		marker := "□"
-		if m.workingSet.IsFileSelected(file.Path) {
-			marker = "☑"
-		}
-
-		lines = append(lines, fmt.Sprintf("%s %s", marker, file.Path))
-	}
-
-	return strings.Join(lines, "\n")
-}
-
-func (m *AppModel) renderRegexContent() string {
-	var lines []string
-
-	// Extract patterns from ordered filters for display
-	var includePatterns []string
-	var excludePatterns []string
-
-	for _, filter := range m.workingSet.RegexFilters {
-		if filter.Valid {
-			if filter.Take {
-				includePatterns = append(includePatterns, filter.Pattern)
-			} else {
-				excludePatterns = append(excludePatterns, filter.Pattern)
-			}
-		}
-	}
-
-	lines = append(lines, "Include patterns:")
-	if len(includePatterns) == 0 {
-		lines = append(lines, "  (none)")
-	} else {
-		for _, pattern := range includePatterns {
-			lines = append(lines, fmt.Sprintf("  + %s", pattern))
-		}
-	}
-
-	lines = append(lines, "")
-	lines = append(lines, "Exclude patterns:")
-	if len(excludePatterns) == 0 {
-		lines = append(lines, "  (none)")
-	} else {
-		for _, pattern := range excludePatterns {
-			lines = append(lines, fmt.Sprintf("  - %s", pattern))
-		}
-	}
-
-	return strings.Join(lines, "\n")
-}
-
-func (m *AppModel) renderHistogramContent() string {
-	if len(m.workingSet.VolumeData) == 0 {
-		return "No volume data available\n(Will be generated in Phase 4)"
-	}
-
-	return "Volume histogram placeholder\n(Implementation in Phase 4)"
-}
-
-func (m *AppModel) renderTimeRangeContent() string {
-	var lines []string
-
-	if m.workingSet.Bundle != nil && m.workingSet.Bundle.TimeRange != nil {
-		lines = append(lines, "Bundle time range:")
-		lines = append(lines, fmt.Sprintf("  Start: %s", m.workingSet.Bundle.TimeRange.Start.Format("2006-01-02 15:04:05")))
-		lines = append(lines, fmt.Sprintf("  End:   %s", m.workingSet.Bundle.TimeRange.End.Format("2006-01-02 15:04:05")))
-	} else {
-		lines = append(lines, "No time range available")
-		lines = append(lines, "(Timestamps not yet parsed)")
-	}
-
-	lines = append(lines, "")
-
-	if m.workingSet.HasTimeFilter() {
-		lines = append(lines, "Active filter:")
-		lines = append(lines, fmt.Sprintf("  Start: %s", m.workingSet.TimeFilter.Start.Format("2006-01-02 15:04:05")))
-		lines = append(lines, fmt.Sprintf("  End:   %s", m.workingSet.TimeFilter.End.Format("2006-01-02 15:04:05")))
-	} else {
-		lines = append(lines, "No time filter active")
-	}
-
-	return strings.Join(lines, "\n")
 }
 
 // Helper methods

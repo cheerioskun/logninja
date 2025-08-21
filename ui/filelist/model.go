@@ -30,6 +30,7 @@ type Model struct {
 	fileStyle  lipgloss.Style
 	sizeStyle  lipgloss.Style
 	emptyStyle lipgloss.Style
+	helpStyle  lipgloss.Style
 }
 
 // NewModel creates a new file list model
@@ -59,6 +60,10 @@ func NewModel() *Model {
 			Align(lipgloss.Right),
 
 		emptyStyle: lipgloss.NewStyle().
+			Foreground(lipgloss.Color("240")).
+			Italic(true),
+
+		helpStyle: lipgloss.NewStyle().
 			Foreground(lipgloss.Color("240")).
 			Italic(true),
 	}
@@ -130,6 +135,21 @@ func (m *Model) View() string {
 	// Summary
 	summary := m.renderSummary()
 
+	// Help text (only when focused)
+	help := ""
+	if m.focused && len(m.files) > 0 {
+		helpItems := []string{
+			"↑/↓/j/k: Navigate",
+			"PgUp/PgDn: Page",
+			"Home/End: First/Last",
+		}
+		help = m.helpStyle.Render(strings.Join(helpItems, " • "))
+	}
+
+	// Join all components
+	if help != "" {
+		return lipgloss.JoinVertical(lipgloss.Left, header, content, summary, help)
+	}
 	return lipgloss.JoinVertical(lipgloss.Left, header, content, summary)
 }
 
@@ -220,8 +240,8 @@ func (m *Model) SetSize(width, height int) {
 	m.height = height
 
 	// Update viewport size
-	// Account for title (2 lines), summary (1 line), and some padding
-	viewportHeight := height - 4
+	// Account for title (2 lines), summary (1 line), help (1 line), and padding
+	viewportHeight := height - 5
 	if viewportHeight < 1 {
 		viewportHeight = 1
 	}

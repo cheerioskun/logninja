@@ -38,9 +38,9 @@ type VolumePoint struct {
 func NewWorkingSet(bundle *Bundle) *WorkingSet {
 	selectedFiles := make(map[string]bool)
 
-	// Initially select all log files
+	// Initially select no files - user must apply filters to select files
 	for _, file := range bundle.Files {
-		selectedFiles[file.Path] = file.IsLogFile
+		selectedFiles[file.Path] = false
 	}
 
 	return &WorkingSet{
