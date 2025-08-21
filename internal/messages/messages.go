@@ -1,19 +1,12 @@
 package messages
 
-// RegexPatternsChangedMsg is sent when regex patterns are modified
-type RegexPatternsChangedMsg struct {
-	Type            RegexPatternType // Include or Exclude
-	Patterns        []string         // Updated patterns
-	SourceComponent string           // Which component sent this
+import "github.com/cheerioskun/logninja/internal/models"
+
+// RegexFiltersChangedMsg is sent when the ordered regex filter list is modified
+type RegexFiltersChangedMsg struct {
+	Filters         []models.RegexFilter // Complete ordered list of regex filters
+	SourceComponent string               // Which component sent this
 }
-
-// RegexPatternType indicates the type of regex pattern
-type RegexPatternType int
-
-const (
-	IncludePatternType RegexPatternType = iota
-	ExcludePatternType
-)
 
 // WorkingSetUpdatedMsg is sent when the working set has been recalculated
 type WorkingSetUpdatedMsg struct {

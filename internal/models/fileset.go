@@ -39,12 +39,22 @@ func NewFileSet() *FileSet {
 func NewFileSetFromWorkingSet(ws *WorkingSet) *FileSet {
 	fs := NewFileSet()
 
-	// Copy filter criteria
-	fs.Criteria.IncludeRegex = make([]string, len(ws.IncludeRegex))
-	copy(fs.Criteria.IncludeRegex, ws.IncludeRegex)
+	// Copy filter criteria from ordered regex filters
+	var includePatterns []string
+	var excludePatterns []string
 
-	fs.Criteria.ExcludeRegex = make([]string, len(ws.ExcludeRegex))
-	copy(fs.Criteria.ExcludeRegex, ws.ExcludeRegex)
+	for _, filter := range ws.RegexFilters {
+		if filter.Valid {
+			if filter.Take {
+				includePatterns = append(includePatterns, filter.Pattern)
+			} else {
+				excludePatterns = append(excludePatterns, filter.Pattern)
+			}
+		}
+	}
+
+	fs.Criteria.IncludeRegex = includePatterns
+	fs.Criteria.ExcludeRegex = excludePatterns
 
 	fs.Criteria.TimeRange = ws.TimeFilter
 	fs.TimeRange = ws.GetEffectiveTimeRange()

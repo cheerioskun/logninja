@@ -13,6 +13,27 @@ import (
 	"github.com/spf13/viper"
 )
 
+// Helper functions for working with ordered regex filters
+func getIncludePatternsFromFilters(filters []models.RegexFilter) []string {
+	var patterns []string
+	for _, filter := range filters {
+		if filter.Valid && filter.Take {
+			patterns = append(patterns, filter.Pattern)
+		}
+	}
+	return patterns
+}
+
+func getExcludePatternsFromFilters(filters []models.RegexFilter) []string {
+	var patterns []string
+	for _, filter := range filters {
+		if filter.Valid && !filter.Take {
+			patterns = append(patterns, filter.Pattern)
+		}
+	}
+	return patterns
+}
+
 var (
 	outputConfig   string
 	smartSelection bool
@@ -141,7 +162,7 @@ func createIntelligentWorkingSet(bundle *models.Bundle) *models.WorkingSet {
 	}
 
 	for _, pattern := range commonExcludes {
-		workingSet.AddExcludeRegex(pattern)
+		workingSet.AddRegexFilter(pattern, false) // false = exclude
 	}
 
 	return workingSet
@@ -220,8 +241,8 @@ func printWorkingSetSummary(ws *models.WorkingSet) {
 	fmt.Printf("  Selected files: %d\n", selectedCount)
 	fmt.Printf("  Selected log files: %d\n", logFileCount)
 	fmt.Printf("  Total size of selected files: %.2f MB\n", float64(selectedSize)/(1024*1024))
-	fmt.Printf("  Include patterns: %d\n", len(ws.IncludeRegex))
-	fmt.Printf("  Exclude patterns: %d\n", len(ws.ExcludeRegex))
+	fmt.Printf("  Include patterns: %d\n", len(getIncludePatternsFromFilters(ws.RegexFilters)))
+	fmt.Printf("  Exclude patterns: %d\n", len(getExcludePatternsFromFilters(ws.RegexFilters)))
 
 	if ws.HasTimeFilter() {
 		fmt.Printf("  Time filter: %s - %s\n",
@@ -261,8 +282,8 @@ func saveWorkingSetConfig(ws *models.WorkingSet, filename string) error {
 	config := WorkingSetConfig{
 		BundlePath:    ws.Bundle.Path,
 		SelectedFiles: ws.SelectedFiles,
-		IncludeRegex:  ws.IncludeRegex,
-		ExcludeRegex:  ws.ExcludeRegex,
+		IncludeRegex:  getIncludePatternsFromFilters(ws.RegexFilters),
+		ExcludeRegex:  getExcludePatternsFromFilters(ws.RegexFilters),
 		TimeFilter:    ws.TimeFilter,
 		Metadata: ConfigMetadata{
 			CreatedAt:       ws.LastUpdated.Format("2006-01-02T15:04:05Z"),

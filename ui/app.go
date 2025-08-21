@@ -2,8 +2,6 @@ package ui
 
 import (
 	"fmt"
-	"path/filepath"
-	"regexp"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -21,8 +19,7 @@ type FocusedPanel int
 
 const (
 	FileTreePanel FocusedPanel = iota
-	IncludePanel
-	ExcludePanel
+	RegexPanel
 	FileListPanel
 	HistogramPanel
 	TimeRangePanel
@@ -35,8 +32,7 @@ type AppModel struct {
 	workingSet *models.WorkingSet
 
 	// UI Components
-	includePanel   *regex.SingleModel
-	excludePanel   *regex.SingleModel
+	regexPanel     *regex.Model
 	fileListPanel  *filelist.Model
 	histogramPanel *histogram.Model
 
@@ -55,9 +51,8 @@ type AppModel struct {
 
 // NewAppModel creates a new application model
 func NewAppModel(workingSet *models.WorkingSet, fs afero.Fs) *AppModel {
-	// Create separate include and exclude panels
-	includePanel := regex.NewSingleModel(regex.IncludeType)
-	excludePanel := regex.NewSingleModel(regex.ExcludeType)
+	// Create unified regex panel
+	regexPanel := regex.NewModel()
 	fileListPanel := filelist.NewModel()
 	histogramPanel := histogram.NewModel(fs)
 
@@ -66,21 +61,19 @@ func NewAppModel(workingSet *models.WorkingSet, fs afero.Fs) *AppModel {
 		for _, file := range workingSet.Bundle.Files {
 			filePaths = append(filePaths, file.Path)
 		}
-		includePanel.SetFiles(filePaths)
-		excludePanel.SetFiles(filePaths)
+		regexPanel.SetFiles(filePaths)
 		histogramPanel.SetWorkingSet(workingSet)
 	}
 
 	return &AppModel{
 		workingSet:     workingSet,
-		includePanel:   includePanel,
-		excludePanel:   excludePanel,
+		regexPanel:     regexPanel,
 		fileListPanel:  fileListPanel,
 		histogramPanel: histogramPanel,
-		focused:        FileTreePanel,
+		focused:        FileListPanel,
 		width:          80,
 		height:         24,
-		panels:         []FocusedPanel{FileTreePanel, IncludePanel, ExcludePanel, FileListPanel, HistogramPanel, TimeRangePanel},
+		panels:         []FocusedPanel{FileListPanel, RegexPanel, HistogramPanel},
 		currentPanel:   0,
 		status:         "Ready",
 		ready:          true,
@@ -107,9 +100,9 @@ func (m *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 		return m, nil
 
-	case messages.RegexPatternsChangedMsg:
-		// Handle regex pattern changes
-		return m, m.handleRegexPatternChange(msg)
+	case messages.RegexFiltersChangedMsg:
+		// Handle ordered regex filter changes
+		return m, m.handleRegexFiltersChange(msg)
 
 	case messages.WorkingSetUpdatedMsg:
 		// Handle working set updates and notify histogram panel
@@ -154,15 +147,9 @@ func (m *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		default:
 			// Forward message to focused panel and collect commands
-			if m.focused == IncludePanel {
+			if m.focused == RegexPanel {
 				var cmd tea.Cmd
-				m.includePanel, cmd = m.includePanel.Update(msg)
-				if cmd != nil {
-					cmds = append(cmds, cmd)
-				}
-			} else if m.focused == ExcludePanel {
-				var cmd tea.Cmd
-				m.excludePanel, cmd = m.excludePanel.Update(msg)
+				m.regexPanel, cmd = m.regexPanel.Update(msg)
 				if cmd != nil {
 					cmds = append(cmds, cmd)
 				}
@@ -223,8 +210,7 @@ func (m *AppModel) renderLayout() string {
 
 	// Create panel contents
 	fileTree := m.renderFileTreePanel(topPanelWidth, topHeight)
-	include := m.renderIncludePanel(topPanelWidth, topHeight)
-	exclude := m.renderExcludePanel(topPanelWidth, topHeight)
+	regexPanel := m.renderRegexPanel(topPanelWidth, topHeight)
 	fileList := m.renderFileListPanel(bottomPanelWidth, bottomHeight)
 	histogram := m.renderHistogramPanel(bottomPanelWidth, bottomHeight)
 	timeRange := m.renderTimeRangePanel(bottomPanelWidth, bottomHeight)
@@ -233,7 +219,7 @@ func (m *AppModel) renderLayout() string {
 	status := m.renderStatusPanel(m.width, statusHeight)
 
 	// Combine panels
-	topRow := lipgloss.JoinHorizontal(lipgloss.Top, fileTree, include, exclude)
+	topRow := lipgloss.JoinHorizontal(lipgloss.Top, fileTree, regexPanel)
 	bottomRow := lipgloss.JoinHorizontal(lipgloss.Top, fileList, histogram, timeRange)
 	content := lipgloss.JoinVertical(lipgloss.Left, topRow, bottomRow)
 
@@ -274,38 +260,20 @@ func (m *AppModel) renderFileTreePanel(width, height int) string {
 	return style.Render(fmt.Sprintf("%s\n\n%s", title, content))
 }
 
-// renderIncludePanel renders the include patterns panel
-func (m *AppModel) renderIncludePanel(width, height int) string {
-	style := m.getPanelStyle(IncludePanel, width, height)
+// renderRegexPanel renders the unified regex patterns panel
+func (m *AppModel) renderRegexPanel(width, height int) string {
+	style := m.getPanelStyle(RegexPanel, width, height)
 
 	// Set component size and focus state
-	m.includePanel.SetSize(width-4, height-4) // Account for border and padding
-	if m.focused == IncludePanel {
-		m.includePanel.Focus()
+	m.regexPanel.SetSize(width-4, height-4) // Account for border and padding
+	if m.focused == RegexPanel {
+		m.regexPanel.Focus()
 	} else {
-		m.includePanel.Blur()
+		m.regexPanel.Blur()
 	}
 
 	// Get the component's view
-	content := m.includePanel.View()
-
-	return style.Render(content)
-}
-
-// renderExcludePanel renders the exclude patterns panel
-func (m *AppModel) renderExcludePanel(width, height int) string {
-	style := m.getPanelStyle(ExcludePanel, width, height)
-
-	// Set component size and focus state
-	m.excludePanel.SetSize(width-4, height-4) // Account for border and padding
-	if m.focused == ExcludePanel {
-		m.excludePanel.Focus()
-	} else {
-		m.excludePanel.Blur()
-	}
-
-	// Get the component's view
-	content := m.excludePanel.View()
+	content := m.regexPanel.View()
 
 	return style.Render(content)
 }
@@ -416,21 +384,35 @@ func (m *AppModel) renderFileTreeContent() string {
 func (m *AppModel) renderRegexContent() string {
 	var lines []string
 
+	// Extract patterns from ordered filters for display
+	var includePatterns []string
+	var excludePatterns []string
+
+	for _, filter := range m.workingSet.RegexFilters {
+		if filter.Valid {
+			if filter.Take {
+				includePatterns = append(includePatterns, filter.Pattern)
+			} else {
+				excludePatterns = append(excludePatterns, filter.Pattern)
+			}
+		}
+	}
+
 	lines = append(lines, "Include patterns:")
-	if len(m.workingSet.IncludeRegex) == 0 {
+	if len(includePatterns) == 0 {
 		lines = append(lines, "  (none)")
 	} else {
-		for _, pattern := range m.workingSet.IncludeRegex {
+		for _, pattern := range includePatterns {
 			lines = append(lines, fmt.Sprintf("  + %s", pattern))
 		}
 	}
 
 	lines = append(lines, "")
 	lines = append(lines, "Exclude patterns:")
-	if len(m.workingSet.ExcludeRegex) == 0 {
+	if len(excludePatterns) == 0 {
 		lines = append(lines, "  (none)")
 	} else {
-		for _, pattern := range m.workingSet.ExcludeRegex {
+		for _, pattern := range excludePatterns {
 			lines = append(lines, fmt.Sprintf("  - %s", pattern))
 		}
 	}
@@ -497,22 +479,17 @@ func (m *AppModel) prevPanel() {
 	m.focused = m.panels[m.currentPanel]
 }
 
-// handleRegexPatternChange processes regex pattern change messages
-func (m *AppModel) handleRegexPatternChange(msg messages.RegexPatternsChangedMsg) tea.Cmd {
+// handleRegexFiltersChange processes ordered regex filter changes
+func (m *AppModel) handleRegexFiltersChange(msg messages.RegexFiltersChangedMsg) tea.Cmd {
 	if m.workingSet == nil {
 		return nil
 	}
 
-	// Update the appropriate pattern list based on message type
-	switch msg.Type {
-	case messages.IncludePatternType:
-		m.workingSet.IncludeRegex = msg.Patterns
-	case messages.ExcludePatternType:
-		m.workingSet.ExcludeRegex = msg.Patterns
-	}
+	// Update the working set with the new ordered filter list
+	m.workingSet.SetRegexFilters(msg.Filters)
 
 	// Apply filtering and broadcast the update
-	m.applyRegexFiltering()
+	m.applyOrderedRegexFiltering()
 
 	// Return command to broadcast working set update to other components
 	return m.broadcastWorkingSetUpdate()
@@ -568,120 +545,47 @@ func (m *AppModel) getFilteredFileNames() []string {
 	return filteredFiles
 }
 
-// applyRegexFiltering applies regex patterns to filter file selections
-// First applies all include patterns, then applies all exclude patterns
-func (m *AppModel) applyRegexFiltering() {
+// applyOrderedRegexFiltering applies regex filters in order (take/exclude)
+// Files are selected IF AND ONLY IF the last regex that matched them was an include regex.
+func (m *AppModel) applyOrderedRegexFiltering() {
 	if m.workingSet == nil || m.workingSet.Bundle == nil {
 		return
 	}
 
-	includePatterns := m.workingSet.IncludeRegex
-	excludePatterns := m.workingSet.ExcludeRegex
-
-	// Step 1: Apply include patterns to get initial set
-	// If no include patterns, start with all files
-	var includedFiles []string
-	if len(includePatterns) == 0 {
-		// No include patterns means include all files
-		for _, file := range m.workingSet.Bundle.Files {
-			includedFiles = append(includedFiles, file.Path)
-		}
-	} else {
-		// Apply all include patterns
-		includedFileSet := make(map[string]bool)
-		for _, pattern := range includePatterns {
-			for _, file := range m.workingSet.Bundle.Files {
-				filename := file.Path
-
-				// Try filepath pattern matching
-				if matched, _ := filepath.Match(pattern, filename); matched {
-					includedFileSet[filename] = true
-					continue
-				}
-
-				// Try regex pattern matching
-				if regex, err := regexp.Compile(pattern); err == nil && regex.MatchString(filename) {
-					includedFileSet[filename] = true
-				}
-			}
-		}
-
-		// Convert set to slice
-		for filename := range includedFileSet {
-			includedFiles = append(includedFiles, filename)
-		}
-	}
-
-	// Step 2: Apply exclude patterns to remove files from included set
-	var filteredFiles []string
-	if len(excludePatterns) == 0 {
-		// No exclude patterns means keep all included files
-		filteredFiles = includedFiles
-	} else {
-		// Apply all exclude patterns
-		excludedFileSet := make(map[string]bool)
-		for _, pattern := range excludePatterns {
-			for _, filename := range includedFiles {
-				// Try filepath pattern matching
-				if matched, _ := filepath.Match(pattern, filename); matched {
-					excludedFileSet[filename] = true
-					continue
-				}
-
-				// Try regex pattern matching
-				if regex, err := regexp.Compile(pattern); err == nil && regex.MatchString(filename) {
-					excludedFileSet[filename] = true
-				}
-			}
-		}
-
-		// Keep files that weren't excluded
-		for _, filename := range includedFiles {
-			if !excludedFileSet[filename] {
-				filteredFiles = append(filteredFiles, filename)
-			}
-		}
-	}
-
-	// Convert to set for efficient lookup
-	filteredFileSet := make(map[string]bool)
-	for _, file := range filteredFiles {
-		filteredFileSet[file] = true
-	}
-
-	// Update file selections based on regex filtering
-	// We need to reset all selections and then apply the filter
-	// First, reset to original selection state (log files)
+	// Start with empty working set (no files selected)
 	for _, file := range m.workingSet.Bundle.Files {
-		originallySelected := file.IsLogFile // Could be enhanced to track user selections
-		passesFilter := filteredFileSet[file.Path]
-
-		// File is selected if it was originally selected AND passes the filter
-		shouldBeSelected := originallySelected && passesFilter
-		m.workingSet.SetFileSelection(file.Path, shouldBeSelected)
+		m.workingSet.SetFileSelection(file.Path, false)
 	}
 
-	// Update status with more detailed info
-	selectedCount := m.workingSet.GetSelectedFileCount()
-	totalCount := len(filteredFiles)
-	includedCount := len(includedFiles)
+	// Track the last matching regex for each file
+	lastMatchingRegex := make(map[string]*models.RegexFilter)
 
-	statusParts := []string{
-		fmt.Sprintf("%d files selected", selectedCount),
+	// Apply each regex filter in order, tracking the last match for each file
+	for _, filter := range m.workingSet.RegexFilters {
+		if !filter.Valid || filter.Compiled == nil {
+			continue
+		}
+
+		for _, file := range m.workingSet.Bundle.Files {
+			// Check if the pattern matches this file path
+			if filter.Compiled.MatchString(file.Path) {
+				// Track this as the last matching regex for this file
+				filterCopy := filter // Make a copy to store in the map
+				lastMatchingRegex[file.Path] = &filterCopy
+			}
+		}
 	}
 
-	if len(includePatterns) > 0 {
-		statusParts = append(statusParts, fmt.Sprintf("%d included", includedCount))
+	// Select files where the last matching regex was an include regex (Take = true)
+	for _, file := range m.workingSet.Bundle.Files {
+		if lastMatch, exists := lastMatchingRegex[file.Path]; exists {
+			// File is selected only if the last matching regex was an include regex
+			m.workingSet.SetFileSelection(file.Path, lastMatch.Take)
+		} else {
+			// No regex matched this file, so it remains unselected
+			m.workingSet.SetFileSelection(file.Path, false)
+		}
 	}
-
-	if len(excludePatterns) > 0 {
-		excludedCount := includedCount - totalCount
-		statusParts = append(statusParts, fmt.Sprintf("%d excluded", excludedCount))
-	}
-
-	statusParts = append(statusParts, fmt.Sprintf("%d final", totalCount))
-
-	m.status = fmt.Sprintf("Filter: %s", strings.Join(statusParts, ", "))
 }
 
 func formatBytes(bytes int64) string {

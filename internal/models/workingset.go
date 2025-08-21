@@ -1,15 +1,24 @@
 package models
 
 import (
+	"regexp"
 	"time"
 )
+
+// RegexFilter represents a single regex filter with take/exclude logic
+type RegexFilter struct {
+	Pattern  string         `json:"pattern"` // The regex pattern text
+	Take     bool           `json:"take"`    // true = include, false = exclude
+	Compiled *regexp.Regexp `json:"-"`       // Compiled regex (not serialized)
+	Valid    bool           `json:"valid"`   // Whether the pattern is valid
+	Error    string         `json:"error"`   // Error message if invalid
+}
 
 // WorkingSet represents the current working state with all user selections and filters
 type WorkingSet struct {
 	Bundle        *Bundle         `json:"bundle"`         // Source bundle
 	SelectedFiles map[string]bool `json:"selected_files"` // File selection state
-	IncludeRegex  []string        `json:"include_regex"`  // Include patterns
-	ExcludeRegex  []string        `json:"exclude_regex"`  // Exclude patterns
+	RegexFilters  []RegexFilter   `json:"regex_filters"`  // Ordered list of regex filters
 	TimeFilter    *TimeRange      `json:"time_filter"`    // Time range filter
 	EstimatedSize int64           `json:"estimated_size"` // Estimated output size
 	VolumeData    []VolumePoint   `json:"volume_data"`    // Histogram data
@@ -37,8 +46,7 @@ func NewWorkingSet(bundle *Bundle) *WorkingSet {
 	return &WorkingSet{
 		Bundle:        bundle,
 		SelectedFiles: selectedFiles,
-		IncludeRegex:  make([]string, 0),
-		ExcludeRegex:  make([]string, 0),
+		RegexFilters:  make([]RegexFilter, 0),
 		TimeFilter:    nil, // No time filter initially
 		EstimatedSize: bundle.TotalSize,
 		VolumeData:    make([]VolumePoint, 0),
@@ -46,32 +54,60 @@ func NewWorkingSet(bundle *Bundle) *WorkingSet {
 	}
 }
 
-// AddIncludeRegex adds a new include regex pattern
-func (ws *WorkingSet) AddIncludeRegex(pattern string) {
-	ws.IncludeRegex = append(ws.IncludeRegex, pattern)
+// AddRegexFilter adds a new regex filter at the end of the list
+func (ws *WorkingSet) AddRegexFilter(pattern string, take bool) error {
+	compiled, err := regexp.Compile(pattern)
+	filter := RegexFilter{
+		Pattern:  pattern,
+		Take:     take,
+		Compiled: compiled,
+		Valid:    err == nil,
+		Error:    "",
+	}
+	if err != nil {
+		filter.Error = err.Error()
+	}
+
+	ws.RegexFilters = append(ws.RegexFilters, filter)
 	ws.LastUpdated = time.Now()
+	return err
 }
 
-// RemoveIncludeRegex removes an include regex pattern by index
-func (ws *WorkingSet) RemoveIncludeRegex(index int) {
-	if index >= 0 && index < len(ws.IncludeRegex) {
-		ws.IncludeRegex = append(ws.IncludeRegex[:index], ws.IncludeRegex[index+1:]...)
+// RemoveRegexFilter removes a regex filter by index
+func (ws *WorkingSet) RemoveRegexFilter(index int) {
+	if index >= 0 && index < len(ws.RegexFilters) {
+		ws.RegexFilters = append(ws.RegexFilters[:index], ws.RegexFilters[index+1:]...)
 		ws.LastUpdated = time.Now()
 	}
 }
 
-// AddExcludeRegex adds a new exclude regex pattern
-func (ws *WorkingSet) AddExcludeRegex(pattern string) {
-	ws.ExcludeRegex = append(ws.ExcludeRegex, pattern)
+// UpdateRegexFilter updates a regex filter at the given index
+func (ws *WorkingSet) UpdateRegexFilter(index int, pattern string, take bool) error {
+	if index < 0 || index >= len(ws.RegexFilters) {
+		return nil
+	}
+
+	compiled, err := regexp.Compile(pattern)
+	ws.RegexFilters[index] = RegexFilter{
+		Pattern:  pattern,
+		Take:     take,
+		Compiled: compiled,
+		Valid:    err == nil,
+		Error:    "",
+	}
+	if err != nil {
+		ws.RegexFilters[index].Error = err.Error()
+	}
+
 	ws.LastUpdated = time.Now()
+	return err
 }
 
-// RemoveExcludeRegex removes an exclude regex pattern by index
-func (ws *WorkingSet) RemoveExcludeRegex(index int) {
-	if index >= 0 && index < len(ws.ExcludeRegex) {
-		ws.ExcludeRegex = append(ws.ExcludeRegex[:index], ws.ExcludeRegex[index+1:]...)
-		ws.LastUpdated = time.Now()
-	}
+// SetRegexFilters replaces the entire regex filter list
+func (ws *WorkingSet) SetRegexFilters(filters []RegexFilter) {
+	ws.RegexFilters = make([]RegexFilter, len(filters))
+	copy(ws.RegexFilters, filters)
+	ws.LastUpdated = time.Now()
 }
 
 // SetTimeFilter sets the time range filter

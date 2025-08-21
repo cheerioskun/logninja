@@ -77,7 +77,7 @@ graph TB
 | | `SingleModel` | `ui/regex/single.go` | Single regex panel |
 | | `Model` (histogram) | `ui/histogram/model.go` | Volume visualization |
 | | `Model` (filelist) | `ui/filelist/model.go` | File selection interface |
-| **Messages** | `RegexPatternsChangedMsg` | `internal/messages/messages.go` | Regex update notification |
+| **Messages** | `RegexFiltersChangedMsg` | `internal/messages/messages.go` | Regex filter update notification |
 | | `WorkingSetUpdatedMsg` | `internal/messages/messages.go` | Selection change notification |
 | | Various UI Messages | `ui/*/model.go` | Component-specific events |
 
@@ -98,7 +98,7 @@ graph TD
     subgraph "User Interaction Loop"
         UserAction["User Action<br/>• File selection<br/>• Regex patterns<br/>• Time range changes"] 
         
-        UserAction --> MessageFlow["Message Flow<br/>RegexPatternsChangedMsg<br/>WorkingSetUpdatedMsg<br/>Component-specific messages"]
+        UserAction --> MessageFlow["Message Flow<br/>RegexFiltersChangedMsg<br/>WorkingSetUpdatedMsg<br/>Component-specific messages"]
         
         MessageFlow --> DataUpdate["Data Updates<br/>• WorkingSet modification<br/>• Filter application<br/>• Volume recalculation"]
         

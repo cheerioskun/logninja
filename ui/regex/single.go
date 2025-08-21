@@ -9,6 +9,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/cheerioskun/logninja/internal/messages"
+	"github.com/cheerioskun/logninja/internal/models"
 )
 
 // Styling constants
@@ -44,28 +45,17 @@ var (
 			Padding(0, 1)
 )
 
-// PatternType represents whether this is for include or exclude patterns
-type PatternType int
-
-const (
-	IncludeType PatternType = iota
-	ExcludeType
-)
-
-// SingleModel represents a single-purpose pattern panel (either include or exclude)
-type SingleModel struct {
-	// Config
-	patternType PatternType
-	title       string
-
+// Model represents a unified regex pattern panel for both include and exclude patterns
+type Model struct {
 	// Data
-	patterns []Pattern
+	patterns []Pattern // Ordered list of patterns (includes and excludes mixed)
 
 	// UI State
-	cursor    int
-	editMode  bool
-	editInput textinput.Model
-	editIndex int // Index of pattern being edited (-1 for new pattern)
+	cursor         int
+	editMode       bool
+	editInput      textinput.Model
+	editIndex      int         // Index of pattern being edited (-1 for new pattern)
+	newPatternType PatternType // Type for the next pattern to be added
 
 	// Component state
 	focused bool
@@ -76,37 +66,28 @@ type SingleModel struct {
 	allFiles []string
 }
 
-// NewSingleModel creates a new single-purpose regex model
-func NewSingleModel(patternType PatternType) *SingleModel {
-	var title string
-	switch patternType {
-	case IncludeType:
-		title = "📥 Include Patterns"
-	case ExcludeType:
-		title = "📤 Exclude Patterns"
-	}
-
+// NewModel creates a new unified regex model
+func NewModel() *Model {
 	input := textinput.New()
 	input.Placeholder = "Enter regex pattern..."
 	input.CharLimit = 256
 
-	return &SingleModel{
-		patternType: patternType,
-		title:       title,
-		patterns:    make([]Pattern, 0),
-		cursor:      0,
-		editMode:    false,
-		editInput:   input,
-		editIndex:   -1,
-		focused:     false,
-		width:       40,
-		height:      20,
-		allFiles:    make([]string, 0),
+	return &Model{
+		patterns:       make([]Pattern, 0),
+		cursor:         0,
+		editMode:       false,
+		editInput:      input,
+		editIndex:      -1,
+		newPatternType: IncludeType, // Default to include
+		focused:        false,
+		width:          40,
+		height:         20,
+		allFiles:       make([]string, 0),
 	}
 }
 
-// Update handles messages for the single pattern panel
-func (m *SingleModel) Update(msg tea.Msg) (*SingleModel, tea.Cmd) {
+// Update handles messages for the unified pattern panel
+func (m *Model) Update(msg tea.Msg) (*Model, tea.Cmd) {
 	var cmd tea.Cmd
 
 	// Handle edit mode input
@@ -137,6 +118,12 @@ func (m *SingleModel) Update(msg tea.Msg) (*SingleModel, tea.Cmd) {
 		case "down", "j":
 			m.moveCursorDown()
 		case "a":
+			// Add include pattern
+			m.newPatternType = IncludeType
+			m.startAddPattern()
+		case "A":
+			// Add exclude pattern (Shift+A)
+			m.newPatternType = ExcludeType
 			m.startAddPattern()
 		case "e":
 			if m.hasPatternAtCursor() {
@@ -149,6 +136,8 @@ func (m *SingleModel) Update(msg tea.Msg) (*SingleModel, tea.Cmd) {
 			if m.hasPatternAtCursor() {
 				m.startEditPattern()
 			} else {
+				// Default to include pattern on enter
+				m.newPatternType = IncludeType
 				m.startAddPattern()
 			}
 		case "t":
@@ -159,8 +148,8 @@ func (m *SingleModel) Update(msg tea.Msg) (*SingleModel, tea.Cmd) {
 	return m, cmd
 }
 
-// View renders the single pattern panel
-func (m *SingleModel) View() string {
+// View renders the unified pattern panel
+func (m *Model) View() string {
 	if m.editMode {
 		return m.renderEditMode()
 	}
@@ -169,37 +158,67 @@ func (m *SingleModel) View() string {
 
 // Component interface methods
 
-func (m *SingleModel) Focus() {
+func (m *Model) Focus() {
 	m.focused = true
 }
 
-func (m *SingleModel) Blur() {
+func (m *Model) Blur() {
 	m.focused = false
 	if m.editMode {
 		m.cancelEdit()
 	}
 }
 
-func (m *SingleModel) IsFocused() bool {
+func (m *Model) IsFocused() bool {
 	return m.focused
 }
 
-func (m *SingleModel) SetSize(width, height int) {
+func (m *Model) SetSize(width, height int) {
 	m.width = width
 	m.height = height
 }
 
 // Data management methods
 
-func (m *SingleModel) SetFiles(files []string) {
+func (m *Model) SetFiles(files []string) {
 	m.allFiles = files
 	m.testPatterns() // Retest patterns with new file list
 }
 
-func (m *SingleModel) GetPatterns() []string {
-	patterns := make([]string, 0, len(m.patterns))
+// GetRegexFilters returns all patterns as ordered RegexFilter list
+func (m *Model) GetRegexFilters() []models.RegexFilter {
+	filters := make([]models.RegexFilter, 0, len(m.patterns))
 	for _, p := range m.patterns {
 		if p.Valid {
+			compiled, _ := regexp.Compile(p.Text) // Already validated
+			filter := models.RegexFilter{
+				Pattern:  p.Text,
+				Take:     p.Type == IncludeType,
+				Compiled: compiled,
+				Valid:    true,
+				Error:    "",
+			}
+			filters = append(filters, filter)
+		}
+	}
+	return filters
+}
+
+// Legacy methods for backward compatibility
+func (m *Model) GetIncludePatterns() []string {
+	patterns := make([]string, 0)
+	for _, p := range m.patterns {
+		if p.Valid && p.Type == IncludeType {
+			patterns = append(patterns, p.Text)
+		}
+	}
+	return patterns
+}
+
+func (m *Model) GetExcludePatterns() []string {
+	patterns := make([]string, 0)
+	for _, p := range m.patterns {
+		if p.Valid && p.Type == ExcludeType {
 			patterns = append(patterns, p.Text)
 		}
 	}
@@ -208,24 +227,20 @@ func (m *SingleModel) GetPatterns() []string {
 
 // Rendering methods
 
-func (m *SingleModel) renderNormalMode() string {
+func (m *Model) renderNormalMode() string {
 	// Header
-	var titleColor lipgloss.Color
-	if m.patternType == IncludeType {
-		titleColor = successColor
-	} else {
-		titleColor = errorColor
-	}
+	titleColor := primaryColor
+	title := "🎯 Filter Patterns"
 
 	header := headerStyle.
 		Foreground(titleColor).
-		Render(m.title)
+		Render(title)
 
 	if m.focused {
 		header = headerStyle.
 			Foreground(titleColor).
 			Background(lipgloss.Color("235")).
-			Render(m.title + " *")
+			Render(title + " *")
 	}
 
 	// Content
@@ -236,7 +251,8 @@ func (m *SingleModel) renderNormalMode() string {
 	if m.focused {
 		helpItems := []string{
 			"↑/↓: Navigate",
-			"a: Add",
+			"a: Add Include",
+			"A: Add Exclude",
 			"e/Enter: Edit",
 			"d: Delete",
 			"t: Test",
@@ -247,7 +263,7 @@ func (m *SingleModel) renderNormalMode() string {
 	return lipgloss.JoinVertical(lipgloss.Left, header, content, help)
 }
 
-func (m *SingleModel) renderEditMode() string {
+func (m *Model) renderEditMode() string {
 	title := "Edit Pattern"
 	if m.editIndex == -1 {
 		title = "Add Pattern"
@@ -264,11 +280,11 @@ func (m *SingleModel) renderEditMode() string {
 	return lipgloss.JoinVertical(lipgloss.Left, header, input, editHelp)
 }
 
-func (m *SingleModel) renderPatterns() string {
+func (m *Model) renderPatterns() string {
 	if len(m.patterns) == 0 {
 		emptyMsg := "No patterns"
 		if m.focused {
-			emptyMsg += " (press 'a' to add)"
+			emptyMsg += " (press 'a' for include, 'A' for exclude)"
 		}
 		return lipgloss.NewStyle().
 			Foreground(secondaryColor).
@@ -321,23 +337,32 @@ func (m *SingleModel) renderPatterns() string {
 	return strings.Join(lines, "\n")
 }
 
-func (m *SingleModel) renderPattern(pattern Pattern, index int, isSelected bool) string {
-	// Pattern text with validation indicator
-	var statusIcon string
-	var textColor lipgloss.Color
+func (m *Model) renderPattern(pattern Pattern, index int, isSelected bool) string {
+	// Pattern type indicator and color
+	var typeIcon string
+	var typeColor lipgloss.Color
 
+	if pattern.Type == IncludeType {
+		typeIcon = "📥"
+		typeColor = successColor
+	} else {
+		typeIcon = "📤"
+		typeColor = errorColor
+	}
+
+	// Pattern validation indicator
+	var statusIcon string
 	if pattern.Valid {
 		statusIcon = "✓"
-		textColor = successColor
 	} else {
 		statusIcon = "✗"
-		textColor = errorColor
+		typeColor = warningColor // Override color for invalid patterns
 	}
 
 	// Format pattern text
 	patternText := pattern.Text
-	if len(patternText) > 25 {
-		patternText = patternText[:22] + "..."
+	if len(patternText) > 20 { // Shorter to make room for type icon
+		patternText = patternText[:17] + "..."
 	}
 
 	// Match count
@@ -348,7 +373,7 @@ func (m *SingleModel) renderPattern(pattern Pattern, index int, isSelected bool)
 		matchInfo = " (error)"
 	}
 
-	content := fmt.Sprintf("%s %s%s", statusIcon, patternText, matchInfo)
+	content := fmt.Sprintf("%s %s %s%s", typeIcon, statusIcon, patternText, matchInfo)
 
 	// Apply styling
 	if isSelected {
@@ -356,17 +381,17 @@ func (m *SingleModel) renderPattern(pattern Pattern, index int, isSelected bool)
 	}
 
 	return patternStyle.
-		Foreground(textColor).
+		Foreground(typeColor).
 		Render(content)
 }
 
 // Internal methods (same logic as the full regex model)
 
-func (m *SingleModel) hasPatternAtCursor() bool {
+func (m *Model) hasPatternAtCursor() bool {
 	return m.cursor >= 0 && m.cursor < len(m.patterns)
 }
 
-func (m *SingleModel) moveCursorUp() {
+func (m *Model) moveCursorUp() {
 	if m.cursor > 0 {
 		m.cursor--
 	} else if len(m.patterns) > 0 {
@@ -374,7 +399,7 @@ func (m *SingleModel) moveCursorUp() {
 	}
 }
 
-func (m *SingleModel) moveCursorDown() {
+func (m *Model) moveCursorDown() {
 	if len(m.patterns) == 0 {
 		m.cursor = 0
 		return
@@ -387,14 +412,14 @@ func (m *SingleModel) moveCursorDown() {
 	}
 }
 
-func (m *SingleModel) startAddPattern() {
+func (m *Model) startAddPattern() {
 	m.editMode = true
 	m.editIndex = -1
 	m.editInput.SetValue("")
 	m.editInput.Focus()
 }
 
-func (m *SingleModel) startEditPattern() {
+func (m *Model) startEditPattern() {
 	if !m.hasPatternAtCursor() {
 		return
 	}
@@ -406,7 +431,7 @@ func (m *SingleModel) startEditPattern() {
 	m.editInput.Focus()
 }
 
-func (m *SingleModel) confirmEdit() (*SingleModel, tea.Cmd) {
+func (m *Model) confirmEdit() (*Model, tea.Cmd) {
 	value := strings.TrimSpace(m.editInput.Value())
 	if value == "" {
 		model := m.cancelEdit()
@@ -431,7 +456,7 @@ func (m *SingleModel) confirmEdit() (*SingleModel, tea.Cmd) {
 	return model, m.emitPatternsChangedCmd()
 }
 
-func (m *SingleModel) cancelEdit() *SingleModel {
+func (m *Model) cancelEdit() *Model {
 	m.editMode = false
 	m.editIndex = -1
 	m.editInput.Blur()
@@ -439,7 +464,7 @@ func (m *SingleModel) cancelEdit() *SingleModel {
 	return m
 }
 
-func (m *SingleModel) deletePattern() tea.Cmd {
+func (m *Model) deletePattern() tea.Cmd {
 	if !m.hasPatternAtCursor() {
 		return nil
 	}
@@ -459,11 +484,12 @@ func (m *SingleModel) deletePattern() tea.Cmd {
 	return m.emitPatternsChangedCmd()
 }
 
-func (m *SingleModel) compilePattern(text string) Pattern {
+func (m *Model) compilePattern(text string) Pattern {
 	compiled, err := regexp.Compile(text)
 	if err != nil {
 		return Pattern{
 			Text:       text,
+			Type:       m.newPatternType,
 			Compiled:   nil,
 			Valid:      false,
 			MatchCount: 0,
@@ -473,6 +499,7 @@ func (m *SingleModel) compilePattern(text string) Pattern {
 
 	return Pattern{
 		Text:       text,
+		Type:       m.newPatternType,
 		Compiled:   compiled,
 		Valid:      true,
 		MatchCount: 0,
@@ -480,13 +507,13 @@ func (m *SingleModel) compilePattern(text string) Pattern {
 	}
 }
 
-func (m *SingleModel) testPatterns() {
+func (m *Model) testPatterns() {
 	for i := range m.patterns {
 		m.patterns[i].MatchCount = m.countMatches(&m.patterns[i])
 	}
 }
 
-func (m *SingleModel) countMatches(pattern *Pattern) int {
+func (m *Model) countMatches(pattern *Pattern) int {
 	if !pattern.Valid || pattern.Compiled == nil {
 		return 0
 	}
@@ -500,28 +527,12 @@ func (m *SingleModel) countMatches(pattern *Pattern) int {
 	return count
 }
 
-// emitPatternsChangedCmd creates a command that emits a RegexPatternsChangedMsg
-func (m *SingleModel) emitPatternsChangedCmd() tea.Cmd {
+// emitPatternsChangedCmd creates a command that emits ordered regex filters
+func (m *Model) emitPatternsChangedCmd() tea.Cmd {
 	return func() tea.Msg {
-		var msgType messages.RegexPatternType
-		if m.patternType == IncludeType {
-			msgType = messages.IncludePatternType
-		} else {
-			msgType = messages.ExcludePatternType
-		}
-
-		return messages.RegexPatternsChangedMsg{
-			Type:            msgType,
-			Patterns:        m.GetPatterns(),
-			SourceComponent: m.getComponentName(),
+		return messages.RegexFiltersChangedMsg{
+			Filters:         m.GetRegexFilters(),
+			SourceComponent: "unified_regex_panel",
 		}
 	}
-}
-
-// getComponentName returns a descriptive name for this component
-func (m *SingleModel) getComponentName() string {
-	if m.patternType == IncludeType {
-		return "include-panel"
-	}
-	return "exclude-panel"
 }
