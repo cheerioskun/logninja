@@ -230,7 +230,7 @@ func (m *Model) GetExcludePatterns() []string {
 func (m *Model) renderNormalMode() string {
 	// Header
 	titleColor := primaryColor
-	title := "🎯 Filter Patterns"
+	title := "Filter Patterns"
 
 	header := headerStyle.
 		Foreground(titleColor).
@@ -355,20 +355,11 @@ func (m *Model) renderPattern(pattern Pattern, index int, isSelected bool) strin
 	var typeColor lipgloss.Color
 
 	if pattern.Type == IncludeType {
-		typeIcon = "📥"
+		typeIcon = "+"
 		typeColor = successColor
 	} else {
-		typeIcon = "📤"
+		typeIcon = "-"
 		typeColor = errorColor
-	}
-
-	// Pattern validation indicator
-	var statusIcon string
-	if pattern.Valid {
-		statusIcon = "✓"
-	} else {
-		statusIcon = "✗"
-		typeColor = warningColor // Override color for invalid patterns
 	}
 
 	// Format pattern text
@@ -385,11 +376,13 @@ func (m *Model) renderPattern(pattern Pattern, index int, isSelected bool) strin
 		matchInfo = " (error)"
 	}
 
-	content := fmt.Sprintf("%s %s %s%s", typeIcon, statusIcon, patternText, matchInfo)
+	content := fmt.Sprintf("%s %s%s", typeIcon, patternText, matchInfo)
 
 	// Apply styling
 	if isSelected {
-		return selectedPatternStyle.Render(content)
+		return selectedPatternStyle.
+			Foreground(typeColor).
+			Render(content)
 	}
 
 	return patternStyle.
