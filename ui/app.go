@@ -276,7 +276,7 @@ func (m *AppModel) renderHeader() string {
 
 	help := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("240")).
-		Render("Tab: Navigate | ?: Help | q: Quit")
+		Render("Tab: Navigate | ?: Help | E: Export | q: Quit")
 
 	return lipgloss.JoinVertical(lipgloss.Left, title, path, help)
 }

@@ -1,31 +1,61 @@
 # LogNinja
 
-A terminal-based log bundle refinement tool that turns massive log collections into focused, actionable datasets.
+Interactive terminal tool for filtering and refining massive log bundles. Instead of copying entire log directories or writing complex scripts, visually explore and select exactly what you need before export. Logninja has real-time regex filtering with live size estimates. Export only what matters.
 
-## Purpose
+---
 
-LogNinja solves the problem of overwhelming log bundles. When you have gigabytes of logs scattered across hundreds of files, finding what matters becomes impossible. LogNinja provides an interactive interface to slice through the noise—select specific files, filter by time ranges, apply regex patterns, and visualize log volume—all before committing to expensive operations.
+## Installing
 
-Instead of blindly copying entire log directories or writing complex scripts, you refine first, then export exactly what you need.
+```bash
+go install github.com/cheerioskun/logninja@latest
+```
 
-## Core Capabilities ( IN PROGRESS )
-
-**Massive Scale Efficiency**: Handle 30-40GB log bundles without breaking a sweat. Content-based log detection, intelligent sampling, and streaming operations keep memory usage minimal while processing thousands of files.
-
-**Smart Log Detection**: Automatically identifies log files through content analysis rather than file extensions. Finds logs hiding in unexpected places and ignores false positives.
-
-**Interactive Refinement**: Visual file tree with multi-select, regex include/exclude patterns, time range filtering, and real-time volume histograms.
-
-**Time-Aware Processing**: Extract timestamp patterns from logs to enable precise temporal filtering. Visualize log volume over time and select specific time windows.
+---
 
 ## Usage
 
 ```bash
-logninja tui /path/to/log/bundle
+# 1. Start interactive mode
+logninja tui /path/to/massive/log/bundle
 ```
 
-Navigate with vim-style keys, select files with space, filter with regex patterns, adjust time ranges, and export refined bundles. The TUI shows real-time size estimates and volume distribution as you refine your selection.
+![Usage screenshot example showing regex patterns and live file list](screenshots/usage.png)
+
+```
+LogNinja is a Terminal User Interface (TUI) application for refining log bundles.
+It allows you to:
+- Select which files to include in your bundle
+- Filter by time range
+- Apply regex patterns for include/exclude filtering
+- Visualize log volume with histograms
+- Export refined bundles
+
+Use 'logninja tui <path>' to start the interactive interface, press E to export.ß
+
+Usage:
+  logninja [command]
+
+Available Commands:
+  completion  Generate the autocompletion script for the specified shell
+  help        Help about any command
+  init        Initialize a working set configuration for a log directory
+  scan        Scan a directory for log files using content analysis
+  tui         Start the interactive TUI interface
+
+Flags:
+      --config string   config file (default is $HOME/.logninja.yaml)
+  -h, --help            help for logninja
+  -v, --verbose         verbose output
+      --version         version for logninja
+
+Use "logninja [command] --help" for more information about a command.
+```
+
+
 
 ---
 
-Built with Go and the Charm TUI framework for responsive performance on large datasets.
+## Roadmap
+- Time slicing and real-time log volume histogram
+- Log file detection based on content
+- Filetree view to select files/folders without regex
